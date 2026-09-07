@@ -1,0 +1,112 @@
+{
+  "schema_version": 2,
+  "mode": "single",
+  "direction": "vertical",
+  "layout": "vertical",
+  "cross_size_px": 341,
+  "gap_px": 16,
+  "sources": {
+    "main": {
+      "path": "../sources/roof_blue.png",
+      "expected_size_wh": [
+        1820,
+        2048
+      ],
+      "sha256": "abcbfa387cc4699873b249b7bf0e941307859b29c73df1de09fbeaff9284ccdb"
+    }
+  },
+  "containers": [
+    {
+      "key": "blue_upper",
+      "label": "Upper central blue roof",
+      "method": "overlap",
+      "same_surface_confirmed": true,
+      "coverage": "visible_panel",
+      "regions": [
+        {
+          "source": "main",
+          "view_box": [
+            0,
+            0,
+            1820,
+            1024
+          ],
+          "quad": [
+            [
+              797,
+              350
+            ],
+            [
+              1131,
+              359
+            ],
+            [
+              1083,
+              1023
+            ],
+            [
+              787,
+              1023
+            ]
+          ],
+          "rectified_size_wh": [
+            341,
+            720
+          ],
+          "notes": "Manual roof-only selection in the top camera view. Excludes end faces and yard."
+        },
+        {
+          "source": "main",
+          "view_box": [
+            0,
+            1024,
+            1820,
+            2048
+          ],
+          "quad": [
+            [
+              831,
+              0
+            ],
+            [
+              1068,
+              0
+            ],
+            [
+              1109,
+              426
+            ],
+            [
+              839,
+              433
+            ]
+          ],
+          "rectified_size_wh": [
+            341,
+            580
+          ],
+          "notes": "Manual roof-only selection in the bottom camera view. Excludes end faces and yard."
+        }
+      ],
+      "matching": {
+        "space": "rectified",
+        "ratio": 0.9,
+        "ransac_px": 3.0,
+        "min_inliers": 12,
+        "feature_channel": "green",
+        "contrast_threshold": 0.004,
+        "edge_threshold": 20,
+        "border_cross_px": 8,
+        "border_axis_px": 5,
+        "max_cross_displacement_px": 12,
+        "feather_px": 8
+      },
+      "seam": {
+        "policy": "source_selected",
+        "position_px": 696
+      },
+      "notes": "Upper central physical container only. The separate container below the gap and the left-lane container are excluded. First camera has almost all the roof; second supplies its cropped end. Seam manually placed near the end plate, not established by camera calibration."
+    }
+  ],
+  "notes": "Previously configured blue roof, now using the unified vertical pipeline. Source identity confirmed by same uploaded-file hash; manually configured corners, no automatic detection."
+}

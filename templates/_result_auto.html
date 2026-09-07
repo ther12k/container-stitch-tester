@@ -1,0 +1,53 @@
+{% set picked_is_combo = picked == 'combo' %}
+
+<div class="auto-wrap">
+  <!-- Auto pick banner -->
+  <div class="auto-banner flex flex-wrap items-center gap-2">
+    <span class="badge badge-ok">✓ Auto: {{ picked_label }}</span>
+    <span class="text-[10px] text-mute">{{ reason }}. Both variants were rendered —
+      {% if alt %}the alternate is summarized below{% else %}only one variant applied to this config{% endif %}.</span>
+  </div>
+
+  <!-- Picked variant, full panel -->
+  {% with job_id=picked_ctx.job_id, panel=picked_ctx.panel, report=picked_ctx.report,
+          ok=true, title=picked_ctx.title, message=picked_ctx.message, skip_sync=true %}
+    {% include '_result.html' %}
+  {% endwith %}
+
+  <!-- Alternate variant, compact card -->
+  {% if alt %}
+    <div class="alt-card rounded-xl border border-line bg-soft/50 flex items-center gap-3">
+      {% if alt.panel.result_url %}
+        <a href="{{ alt.panel.result_url }}" target="_blank" class="shrink-0">
+          <img src="{{ alt.panel.result_url }}" alt="Alternate variant result"
+               class="w-28 h-14 object-contain rounded-md border border-line bg-white">
+        </a>
+      {% endif %}
+      <div class="grow min-w-0">
+        <p class="text-xs font-bold flex items-center gap-1.5">
+          {{ alt.title }}
+          <span class="badge badge-mute">alternate</span>
+        </p>
+        <p class="text-[10px] text-mute mt-0.5">
+          Output {{ alt.panel.output_size_wh | join(' × ') if alt.panel.output_size_wh else '—' }}
+          {% if alt.panel.file_size %} · {{ alt.panel.file_size }}{% endif %}
+          · <code class="font-mono bg-soft px-1 py-0.5 rounded">{{ alt.job_id }}</code>
+        </p>
+        <p class="text-[9px] text-mute mt-0.5">Think this one matches reality better? Its full outputs are one click away.</p>
+      </div>
+      <div class="shrink-0 flex items-center gap-1.5">
+        {% if alt.panel.result_url %}
+          <a href="{{ alt.panel.result_url }}" target="_blank" class="btn-ghost !py-1 !px-2 text-[10px]">Open</a>
+        {% endif %}
+        <a href="/jobs/{{ alt.job_id }}/report.json" target="_blank" class="btn-ghost !py-1 !px-2 text-[10px]">Report</a>
+      </div>
+    </div>
+  {% endif %}
+</div>
+
+<script>
+  // Sync segmented controls with the picked variant, then refresh the jobs list.
+  setSeg('seg-mode', {{ (picked_ctx.panel.mode or 'none') | tojson }});
+  setSeg('seg-direction', {{ (picked_ctx.panel.direction or 'none') | tojson }});
+  document.body.dispatchEvent(new Event('refreshJobs'));
+</script>

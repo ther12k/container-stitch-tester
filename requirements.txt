@@ -1,0 +1,6 @@
+# Runtime versions used for the included examples and validation.
+# Use a clean virtual environment; install one OpenCV distribution, not both.
+numpy==2.3.5
+opencv-python-headless==4.13.0.92
+
+Flask==3.0.3

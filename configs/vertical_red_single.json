@@ -1,0 +1,111 @@
+{
+  "schema_version": 2,
+  "mode": "single",
+  "direction": "vertical",
+  "layout": "vertical",
+  "cross_size_px": 341,
+  "gap_px": 16,
+  "sources": {
+    "main": {
+      "path": "../sources/roof_red.png",
+      "expected_size_wh": [
+        1820,
+        2048
+      ],
+      "sha256": "9365668886979d5970170aae39e7c6778ea9eefa09b6841823320fb6f27454b7"
+    }
+  },
+  "containers": [
+    {
+      "key": "red_roof",
+      "label": "Red roof - PARTIAL",
+      "method": "overlap",
+      "same_surface_confirmed": true,
+      "coverage": "partial",
+      "regions": [
+        {
+          "source": "main",
+          "view_box": [
+            0,
+            0,
+            1820,
+            1024
+          ],
+          "quad": [
+            [
+              797,
+              392
+            ],
+            [
+              1137,
+              398
+            ],
+            [
+              1085,
+              1023
+            ],
+            [
+              783,
+              1023
+            ]
+          ],
+          "rectified_size_wh": [
+            341,
+            651
+          ],
+          "notes": "Manual roof-only selection in the top camera view. Excludes end faces and yard."
+        },
+        {
+          "source": "main",
+          "view_box": [
+            0,
+            1024,
+            1820,
+            2048
+          ],
+          "quad": [
+            [
+              829,
+              0
+            ],
+            [
+              1072,
+              0
+            ],
+            [
+              1175,
+              1023
+            ],
+            [
+              837,
+              1023
+            ]
+          ],
+          "rectified_size_wh": [
+            341,
+            1301
+          ],
+          "notes": "Manual roof-only selection in the bottom camera view. Excludes end faces and yard."
+        }
+      ],
+      "matching": {
+        "space": "rectified",
+        "ratio": 0.85,
+        "ransac_px": 3.0,
+        "min_inliers": 8,
+        "feature_channel": "gray",
+        "contrast_threshold": 0.008,
+        "edge_threshold": 18,
+        "border_cross_px": 12,
+        "border_axis_px": 10,
+        "max_cross_displacement_px": 12,
+        "feather_px": 24
+      },
+      "seam": {
+        "policy": "source_selected"
+      },
+      "notes": "Partial roof: lower/far end outside the original frame. Weak texture requires an explicitly reduced minimum of 8 inliers for this sample; output is for visual review, not measurement or unattended production. No missing end is generated."
+    }
+  ],
+  "notes": "Both supplied red roof views; sample-specific manual rectification and rectified cross-axis feature gate. No assumption that the photograph contains the far end."
+}

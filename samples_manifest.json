@@ -1,0 +1,172 @@
+{
+  "unique_original_images": 9,
+  "configured_original_images": 5,
+  "existing_result_images": 6,
+  "raw_only_original_images": 4,
+  "notes": [
+    "Repeated uploads of the same original are included once.",
+    "These are original supplied PNG files, copied without re-encoding.",
+    "AI-generated illustrations are not included.",
+    "Four newer inputs are included for testing; no reviewed recipes or new processing results are supplied for them.",
+    "Existing result images and engine test logs were carried over from the earlier package, not regenerated in this packaging step."
+  ],
+  "samples": [
+    {
+      "key": "combo_1",
+      "description": "Blue SINOKOR horizontal combo \u2014 first view",
+      "path": "sources/combo_1.png",
+      "uploaded_filename": "56b62f82-f85a-416f-9866-7bc70964c543.png",
+      "dimensions_wh": [
+        2048,
+        569
+      ],
+      "bytes": 2098647,
+      "sha256": "786344d62fa932a2def286d9fa5bb9ce064898d525394a410d2907edc021b77b",
+      "status": "configured_with_existing_results",
+      "configs": [
+        "configs/combo_1.json"
+      ],
+      "results": [
+        "examples/combo_1/result.png"
+      ]
+    },
+    {
+      "key": "combo_2",
+      "description": "Blue SINOKOR horizontal combo \u2014 second view",
+      "path": "sources/combo_2.png",
+      "uploaded_filename": "d317722c-cead-42e9-99de-31d11c4a77ee.png",
+      "dimensions_wh": [
+        2048,
+        448
+      ],
+      "bytes": 1007716,
+      "sha256": "a32a4b5140305adfd0cfe1b02254674d0df5743ba51a32bec71a7fe1409a98ed",
+      "status": "configured_with_existing_results",
+      "configs": [
+        "configs/combo_2.json"
+      ],
+      "results": [
+        "examples/combo_2/result.png"
+      ]
+    },
+    {
+      "key": "single_grey",
+      "description": "Grey horizontal single container",
+      "path": "sources/single_grey.png",
+      "uploaded_filename": "f52af4c8-01b7-4d04-adca-3c79819a9d83.png",
+      "dimensions_wh": [
+        2048,
+        486
+      ],
+      "bytes": 1509154,
+      "sha256": "9d719b3ea509c48e5e35f77d93de0755c4855db41e39cf617b0d29ba7ceea5f2",
+      "status": "configured_with_existing_results",
+      "configs": [
+        "configs/single_grey.json"
+      ],
+      "results": [
+        "examples/single_grey/result.png"
+      ]
+    },
+    {
+      "key": "roof_blue",
+      "description": "Blue vertical roof view \u2014 central combo",
+      "path": "sources/roof_blue.png",
+      "uploaded_filename": "a42069b6-876d-4241-b36c-f0f2c15471b4.png",
+      "dimensions_wh": [
+        1820,
+        2048
+      ],
+      "bytes": 7225362,
+      "sha256": "abcbfa387cc4699873b249b7bf0e941307859b29c73df1de09fbeaff9284ccdb",
+      "status": "configured_with_existing_results",
+      "configs": [
+        "configs/vertical_blue_single.json",
+        "configs/vertical_blue_combo.json"
+      ],
+      "results": [
+        "examples/vertical_blue_single/result.png",
+        "examples/vertical_blue_combo/result.png"
+      ]
+    },
+    {
+      "key": "roof_red",
+      "description": "Red vertical single-container roof",
+      "path": "sources/roof_red.png",
+      "uploaded_filename": "4e6d5c65-21c1-45f7-863b-ac4ded9ac19d.png",
+      "dimensions_wh": [
+        1820,
+        2048
+      ],
+      "bytes": 6969863,
+      "sha256": "9365668886979d5970170aae39e7c6778ea9eefa09b6841823320fb6f27454b7",
+      "status": "configured_with_existing_results",
+      "configs": [
+        "configs/vertical_red_single.json"
+      ],
+      "results": [
+        "examples/vertical_red_single/result.png"
+      ]
+    },
+    {
+      "key": "side_blue_heung_partial",
+      "description": "Blue HEUNG-A side view \u2014 cropped/misaligned halves",
+      "path": "sources/side_blue_heung_partial.png",
+      "uploaded_filename": "d2f76423-edac-4ca1-b80c-3a3e694e35ae.png",
+      "dimensions_wh": [
+        2048,
+        576
+      ],
+      "bytes": 1448039,
+      "sha256": "47331bb02d7c231c8fd6b890314de346cef4193f758c9f630ea6afc76b8adcde",
+      "status": "raw_input_only_needs_reviewed_configuration",
+      "configs": [],
+      "results": []
+    },
+    {
+      "key": "roof_blue_vehicle_177",
+      "description": "Blue top-down view with vehicle 177 \u2014 roof/doors/equipment",
+      "path": "sources/roof_blue_vehicle_177.png",
+      "uploaded_filename": "bf5c1ce8-96c9-4a4a-a119-42bead76b235.png",
+      "dimensions_wh": [
+        1820,
+        2048
+      ],
+      "bytes": 7616172,
+      "sha256": "b795cb1bd0d2ce7bb61fddb4002fe69baa028f6bb18fe76fe8633f6d5d047edb",
+      "status": "raw_input_only_needs_reviewed_configuration",
+      "configs": [],
+      "results": []
+    },
+    {
+      "key": "side_green_heung",
+      "description": "Green HEUNG-A horizontal side view",
+      "path": "sources/side_green_heung.png",
+      "uploaded_filename": "9d3bc6c0-8755-4878-b204-04dec1a202c3.png",
+      "dimensions_wh": [
+        2048,
+        576
+      ],
+      "bytes": 1966053,
+      "sha256": "2edb97f0da6e87618d2a304a371e23792d06673f7a1d6cfc42810a57dbd69f32",
+      "status": "raw_input_only_needs_reviewed_configuration",
+      "configs": [],
+      "results": []
+    },
+    {
+      "key": "roof_blue_spreader",
+      "description": "Blue top-down view with spreader occluding the roof",
+      "path": "sources/roof_blue_spreader.png",
+      "uploaded_filename": "2bd86d85-804e-4017-aac8-f771f4423578.png",
+      "dimensions_wh": [
+        1820,
+        2048
+      ],
+      "bytes": 7199658,
+      "sha256": "5c9e19cc434dde7f4d4d648f98813a129754c9aad4fa684cb3f7e19864ad7880",
+      "status": "raw_input_only_needs_reviewed_configuration",
+      "configs": [],
+      "results": []
+    }
+  ]
+}

@@ -1,0 +1,1243 @@
+#!/usr/bin/env python3
+"""One non-generative horizontal/vertical processor for single and combo containers.
+
+A job contains explicitly grouped physical containers. Each group independently
+uses one of three methods: rectify (one region), edge (two unverified adjacent
+sections), or overlap (two operator-confirmed overlapping views). Groups are then
+laid out with a transparent separator. Features NEVER match across groups.
+
+Example:
+    python container_stitch.py --mode single --config configs/single_grey.json --out run_single
+    python container_stitch.py --mode combo --config configs/combo_1.json --out run_combo
+    python container_stitch.py --direction vertical --config configs/vertical_blue_combo.json --out run_roofs
+    python container_stitch.py --batch configs/all_examples.json --out run_all
+
+Requires Python >=3.11 with the pinned dependencies, NumPy and OpenCV with SIFT. No network, learned model,
+OCR, inpainting, detection, automatic identity inference, or generated pixels.
+Image warping resamples pixels; exposure correction and overlap blending change
+values. Keep original photographs as the authoritative record.
+"""
+from __future__ import annotations
+
+import argparse
+from dataclasses import dataclass
+import hashlib
+import json
+import math
+import os
+from pathlib import Path
+import re
+import shutil
+import sys
+import tempfile
+from typing import Any
+
+import cv2
+import numpy as np
+
+VERSION = "2.1.0"
+MAX_PIXELS = 25_000_000
+MAX_DIM = 20_000
+MAX_REGIONS = 16
+
+
+
+
+def direction_hint_from_view_boxes(config: dict[str, Any]) -> str | None:
+    """Infer only obvious side-by-side / stacked composite-view layouts.
+
+    This is deliberately conservative: it votes only when two regions from the
+    same source use disjoint view boxes on one axis and strongly overlap on the
+    other. It does not infer camera motion from pixels or filenames.
+    """
+    votes: list[str] = []
+    containers = config.get("containers")
+    if not isinstance(containers, list):
+        return None
+    for c in containers:
+        if not isinstance(c, dict) or c.get("method") == "rectify":
+            continue
+        regions = c.get("regions")
+        if not isinstance(regions, list) or len(regions) != 2:
+            continue
+        a, b = regions
+        if not isinstance(a, dict) or not isinstance(b, dict) or a.get("source") != b.get("source"):
+            continue
+        ba, bb = a.get("view_box"), b.get("view_box")
+        if not (isinstance(ba, list) and isinstance(bb, list) and len(ba) == len(bb) == 4):
+            continue
+        try:
+            ax0, ay0, ax1, ay1 = map(float, ba)
+            bx0, by0, bx1, by1 = map(float, bb)
+        except (TypeError, ValueError):
+            continue
+        aw, ah, bw, bh = ax1-ax0, ay1-ay0, bx1-bx0, by1-by0
+        if min(aw, ah, bw, bh) <= 0:
+            continue
+        x_overlap = max(0.0, min(ax1, bx1)-max(ax0, bx0))
+        y_overlap = max(0.0, min(ay1, by1)-max(ay0, by0))
+        x_fraction = x_overlap / min(aw, bw)
+        y_fraction = y_overlap / min(ah, bh)
+        vertical_disjoint = ay1 <= by0 or by1 <= ay0
+        horizontal_disjoint = ax1 <= bx0 or bx1 <= ax0
+        if vertical_disjoint and x_fraction >= 0.70:
+            votes.append("vertical")
+        elif horizontal_disjoint and y_fraction >= 0.70:
+            votes.append("horizontal")
+    return votes[0] if votes and all(v == votes[0] for v in votes) else None
+
+class ProcessingError(ValueError):
+    """Invalid input or an alignment that must not be published."""
+
+    def __init__(self, message: str, details: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.details = details or {}
+
+
+def integer(value: Any, name: str, low: int, high: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+        raise ProcessingError(f"{name} must be an integer.")
+    if not low <= value <= high:
+        raise ProcessingError(f"{name} must be {low}..{high}.")
+    return int(value)
+
+
+def number(value: Any, name: str, low: float, high: float) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float, np.number)):
+        raise ProcessingError(f"{name} must be numeric.")
+    value = float(value)
+    if not np.isfinite(value) or not low <= value <= high:
+        raise ProcessingError(f"{name} must be finite and {low}..{high}.")
+    return value
+
+
+def boolean(value: Any, name: str) -> bool:
+    if not isinstance(value, bool):
+        raise ProcessingError(f"{name} must be true or false, not a string or number.")
+    return value
+
+
+def object_keys(value: Any, allowed: set[str], name: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ProcessingError(f"{name} must be a JSON object.")
+    unknown = set(value) - allowed
+    if unknown:
+        raise ProcessingError(f"Unknown {name} field(s): {', '.join(sorted(unknown))}.")
+    return value
+
+
+def safe_key(value: Any, name: str) -> str:
+    if not isinstance(value, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", value) is None:
+        raise ProcessingError(f"{name} must be a safe 1..64 character name using letters, digits, _ or -.")
+    return value
+
+
+def normalize_id(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ProcessingError("Container IDs must be nonempty strings or null.")
+    result = "".join(c for c in value.upper() if c.isalnum())
+    if not result:
+        raise ProcessingError("Container ID must contain letters or digits.")
+    return result
+
+
+def check_size(width: int, height: int) -> None:
+    if min(width, height) < 2 or max(width, height) > MAX_DIM or width * height > MAX_PIXELS:
+        raise ProcessingError(f"Unsafe image/canvas size: {width} x {height}.")
+
+
+def digest(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def write_json(path: Path, data: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Commit the report last; a success report is the job completion marker.
+    temp = path.with_suffix(path.suffix + ".tmp")
+    temp.write_text(json.dumps(data, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+    os.replace(temp, path)
+
+
+def save_image(path: Path, image: np.ndarray) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ok, encoded = cv2.imencode(path.suffix, image)
+    if not ok:
+        raise ProcessingError(f"Cannot encode output: {path.name}")
+    encoded.tofile(str(path))
+
+
+def read_image(path: Path) -> np.ndarray:
+    if not path.is_file():
+        raise ProcessingError(f"Image not found: {path}")
+    if path.stat().st_size > 256_000_000:
+        raise ProcessingError("Encoded image exceeds the 256 MB input limit.")
+    # UNCHANGED uses encoded pixel orientation (no automatic EXIF rotation).
+    image = cv2.imdecode(np.fromfile(str(path), np.uint8), cv2.IMREAD_UNCHANGED)
+    if image is None or image.dtype != np.uint8:
+        raise ProcessingError("Input must decode to an 8-bit grayscale, BGR or opaque BGRA image.")
+    if image.ndim == 2:
+        image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    elif image.ndim != 3 or image.shape[2] not in (3, 4):
+        raise ProcessingError("Unsupported input channel count.")
+    if image.shape[2] == 4:
+        if np.any(image[..., 3] != 255):
+            raise ProcessingError("Transparent source images are not supported. Use opaque originals.")
+        image = image[..., :3].copy()
+    h, w = image.shape[:2]
+    check_size(w, h)
+    if min(w, h) < 16:
+        raise ProcessingError("Source must be at least 16 pixels on each side.")
+    return image
+
+
+def check_quad(value: Any, width: int, height: int) -> np.ndarray:
+    try:
+        q = np.asarray(value, dtype=np.float32)
+    except (TypeError, ValueError) as exc:
+        raise ProcessingError("quad must contain numeric coordinates.") from exc
+    if q.shape != (4, 2) or not np.isfinite(q).all():
+        raise ProcessingError("quad must be four finite [x,y] points in TL, TR, BR, BL order.")
+    if (q < 0).any() or (q[:, 0] > width - 1).any() or (q[:, 1] > height - 1).any():
+        raise ProcessingError("A corner is outside its source view.")
+    if not cv2.isContourConvex(q) or cv2.contourArea(q, oriented=True) < 16:
+        raise ProcessingError("quad must be a convex, nondegenerate TL/TR/BR/BL quadrilateral.")
+    if q[0, 0] + q[3, 0] >= q[1, 0] + q[2, 0] or q[0, 1] + q[1, 1] >= q[2, 1] + q[3, 1]:
+        raise ProcessingError("quad corner order must be TL, TR, BR, BL.")
+    return q
+
+
+def mask_for(shape: tuple[int, int], q: np.ndarray) -> np.ndarray:
+    mask = np.zeros(shape, np.uint8)
+    cv2.fillConvexPoly(mask, np.rint(q).astype(np.int32), 255)
+    return mask
+
+
+def rectification(q: np.ndarray, height: int) -> tuple[np.ndarray, tuple[int, int]]:
+    horizontal = np.linalg.norm(q[1] - q[0]) + np.linalg.norm(q[2] - q[3])
+    vertical = np.linalg.norm(q[3] - q[0]) + np.linalg.norm(q[2] - q[1])
+    width = int(round(float(horizontal / vertical) * (height - 1))) + 1
+    check_size(width, height)
+    dst = np.float32([[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]])
+    H = cv2.getPerspectiveTransform(q, dst)
+    if not np.isfinite(H).all() or abs(np.linalg.det(H)) < 1e-12:
+        raise ProcessingError("Degenerate perspective rectification.")
+    return H, (width, height)
+
+
+
+def rectification_axis(q: np.ndarray, cross_size: int, direction: str,
+                       explicit_size: list[int] | None = None) -> tuple[np.ndarray, tuple[int, int]]:
+    """Output dimensions are a presentation coordinate system, not physical dimensions."""
+    if explicit_size is None and direction == "horizontal":
+        return rectification(q, cross_size)
+    if explicit_size is not None:
+        width, height = explicit_size
+    else:
+        across = np.linalg.norm(q[1] - q[0]) + np.linalg.norm(q[2] - q[3])
+        along = np.linalg.norm(q[3] - q[0]) + np.linalg.norm(q[2] - q[1])
+        width, height = cross_size, int(round(float(along / across) * (cross_size - 1))) + 1
+    check_size(width, height)
+    dst = np.float32([[0, 0], [width-1, 0], [width-1, height-1], [0, height-1]])
+    H = cv2.getPerspectiveTransform(q, dst)
+    projected_quad(q, H)
+    return H, (width, height)
+
+def warp(image: np.ndarray, mask: np.ndarray, H: np.ndarray,
+         size: tuple[int, int]) -> tuple[np.ndarray, np.ndarray]:
+    """Premultiplied bilinear warp; samples outside the selected face do not bleed in."""
+    check_size(*size)
+    m = mask.astype(np.float32) / 255.0
+    coverage = cv2.warpPerspective(m, H, size, flags=cv2.INTER_LINEAR)
+    pixels = cv2.warpPerspective(image.astype(np.float32) * m[..., None], H, size,
+                                 flags=cv2.INTER_LINEAR)
+    valid = coverage > 1e-6
+    pixels[valid] /= coverage[valid, None]
+    pixels[~valid] = 0
+    return pixels, valid
+
+
+def bgra(pixels: np.ndarray, valid: np.ndarray) -> np.ndarray:
+    return np.dstack([np.clip(np.rint(pixels), 0, 255).astype(np.uint8), valid.astype(np.uint8) * 255])
+
+
+@dataclass
+class Region:
+    source: str
+    box: list[int]
+    quad: np.ndarray
+    feature_quad: np.ndarray
+    image: np.ndarray
+    bit: int
+    config: dict[str, Any]
+
+    @property
+    def mask(self) -> np.ndarray:
+        return mask_for(self.image.shape[:2], self.quad)
+
+    @property
+    def feature_mask(self) -> np.ndarray:
+        return mask_for(self.image.shape[:2], self.feature_quad)
+
+    def report(self, H: np.ndarray) -> dict[str, Any]:
+        x0, y0, _, _ = self.box
+        input_to_view = np.float64([[1, 0, -x0], [0, 1, -y0], [0, 0, 1]])
+        return {
+            "source": self.source, "source_bit": self.bit,
+            "view_box_xyxy_exclusive": self.box,
+            "quad_tl_tr_br_bl_in_view": self.quad.tolist(),
+            "feature_quad_in_view": self.feature_quad.tolist(),
+            "view_to_container_homography": H.tolist(),
+            "input_to_container_homography": (H @ input_to_view).tolist(),
+            "supplied_container_id": self.config.get("container_id"),
+            "notes": self.config.get("notes", "Visible region only; hidden edges not reconstructed."),
+        }
+
+
+@dataclass
+class Group:
+    config: dict[str, Any]
+    regions: list[Region]
+
+
+@dataclass
+class Tile:
+    image: np.ndarray
+    geometry: np.ndarray
+    sources: np.ndarray
+    report: dict[str, Any]
+
+
+def legacy_to_job(config: dict[str, Any], source_path: str) -> dict[str, Any]:
+    """Adapt the two earlier manual configuration formats without old modules."""
+    size = config.get("expected_size_wh")
+    common = {
+        "schema_version": 1, "height": config.get("height", 320),
+        "sources": {"main": {"path": source_path, "expected_size_wh": size}},
+        "notes": "Adapted from an earlier manual configuration; original group selection retained.",
+    }
+    if "left_quad" in config:
+        if not isinstance(size, list) or len(size) != 2:
+            raise ProcessingError("Legacy config requires expected_size_wh.")
+        w, h = size
+        split = config.get("split_x")
+        regions = []
+        for side, box in [("left", [0, 0, split, h]), ("right", [split, 0, w, h])]:
+            item = {"source": "main", "view_box": box, "quad": config.get(f"{side}_quad")}
+            if f"{side}_feature_quad" in config:
+                item["feature_quad"] = config[f"{side}_feature_quad"]
+            regions.append(item)
+        exposure = {**config.get("exposure", {}), "enabled": True}
+        common.update(mode="single", gap_px=12, containers=[{
+            "key": "container_1", "method": "edge", "same_surface_confirmed": True,
+            "regions": regions, "exposure": exposure,
+        }])
+        return common
+    if "panels" in config:
+        groups = []
+        for i, panel in enumerate(config["panels"], 1):
+            groups.append({
+                "key": f"container_{i}", "label": panel.get("label", f"Container {i}"),
+                "method": "rectify", "regions": [{
+                    "source": "main", "view_box": panel.get("view_box"), "quad": panel.get("quad"),
+                    "notes": panel.get("coverage_note", "Visible panel only."),
+                }],
+            })
+        common.update(mode="single" if len(groups) == 1 else "combo",
+                      gap_px=max(1, config.get("gap", 12)), containers=groups)
+        return common
+    raise ProcessingError("Unrecognized configuration. Use schema_version: 1 or an earlier horizontal config.")
+
+
+def load_job(config_path: Path, mode: str | None = None, input_path: Path | None = None,
+             overrides: dict[str, Path] | None = None, direction: str | None = None
+             ) -> tuple[dict[str, Any], dict[str, np.ndarray], list[dict[str, Any]], list[Group], list[str]]:
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    if not isinstance(config, dict):
+        raise ProcessingError("Configuration must be a JSON object.")
+    warnings: list[str] = []
+    if "schema_version" not in config:
+        if input_path is None:
+            raise ProcessingError("Earlier configuration formats require --input ORIGINAL_IMAGE.")
+        config = legacy_to_job(config, str(input_path.resolve()))
+        warnings.append("Legacy config adapted. Physical grouping comes from its manual selections, not detection.")
+    object_keys(config, {"schema_version", "mode", "height", "gap_px", "sources", "containers", "notes",
+                         "direction", "layout", "cross_size_px"}, "job")
+    version = integer(config.get("schema_version"), "schema_version", 1, 2)
+    if version == 2 and "direction" not in config:
+        raise ProcessingError("Schema 2 requires an explicit direction: horizontal, vertical, or auto.")
+    requested_direction = config.get("direction", "horizontal")
+    if requested_direction not in ("horizontal", "vertical", "auto"):
+        raise ProcessingError("direction must be horizontal, vertical, or auto.")
+    view_hint = direction_hint_from_view_boxes(config)
+    if requested_direction == "auto":
+        if view_hint is None:
+            raise ProcessingError("direction:auto is ambiguous for these regions. Set horizontal or vertical explicitly.")
+        config["direction"] = view_hint
+        warnings.append(f"Direction auto-resolved to {view_hint} from obvious same-source view-box layout; pixel content was not inspected.")
+    else:
+        config["direction"] = requested_direction
+        if view_hint is not None and view_hint != requested_direction:
+            raise ProcessingError(
+                f"Direction mismatch: selected view boxes are clearly {view_hint}ly arranged, "
+                f"but the recipe says {requested_direction}. Refusing to create a misleading composite.",
+                {"configured_direction": requested_direction, "view_box_direction_hint": view_hint},
+            )
+    if direction is not None and direction != config["direction"]:
+        raise ProcessingError("CLI direction conflicts with resolved configuration direction; refusing to reinterpret corners.")
+    config["layout"] = config.get("layout", config["direction"])
+    if config["layout"] not in ("horizontal", "vertical"):
+        raise ProcessingError("layout must be horizontal or vertical.")
+    if "height" in config and (config["direction"] != "horizontal" or "cross_size_px" in config):
+        raise ProcessingError("height is a horizontal legacy alias; do not combine it with vertical direction or cross_size_px.")
+    if "height" in config:
+        integer(config["height"], "height", 16, 4096)
+    config["cross_size_px"] = integer(config.get("cross_size_px", config.pop("height", 320)),
+                                      "cross_size_px", 16, 4096)
+    if config.get("mode") not in ("single", "combo"):
+        raise ProcessingError("Config mode must explicitly be single or combo. Automatic mode is not supported.")
+    if mode is not None and mode != config["mode"]:
+        raise ProcessingError("CLI mode conflicts with configuration mode; refusing to reinterpret grouping.")
+    config["gap_px"] = integer(config.get("gap_px", 12), "gap_px", 1, 256)
+    containers = config.get("containers")
+    if not isinstance(containers, list) or not 1 <= len(containers) <= 8:
+        raise ProcessingError("containers must contain 1..8 physical-container groups.")
+    if (config["mode"] == "single" and len(containers) != 1
+            or config["mode"] == "combo" and len(containers) < 2):
+        raise ProcessingError("single requires exactly one group; combo requires two or more groups.")
+    source_cfg = config.get("sources")
+    if not isinstance(source_cfg, dict) or not 1 <= len(source_cfg) <= 8:
+        raise ProcessingError("sources must name 1..8 input images.")
+    overrides = dict(overrides or {})
+    if input_path is not None:
+        if len(source_cfg) != 1:
+            raise ProcessingError("--input is only for a one-source job. Use --source NAME=PATH for multiple sources.")
+        name = next(iter(source_cfg))
+        if name in overrides:
+            raise ProcessingError("Do not override the same source with both --input and --source.")
+        overrides[name] = input_path
+    if set(overrides) - set(source_cfg):
+        raise ProcessingError("A --source override names an unknown source.")
+    images: dict[str, np.ndarray] = {}
+    records: list[dict[str, Any]] = []
+    total_pixels = 0
+    for name, info in source_cfg.items():
+        safe_key(name, "source name")
+        object_keys(info, {"path", "expected_size_wh", "sha256"}, f"source {name}")
+        if not isinstance(info.get("path"), str) or not info["path"]:
+            raise ProcessingError("Each source requires a nonempty local path.")
+        path = (Path(overrides[name]).resolve() if name in overrides
+                else (config_path.parent / info["path"]).resolve())
+        im = read_image(path)
+        h, w = im.shape[:2]
+        expected = info.get("expected_size_wh")
+        if not isinstance(expected, list) or len(expected) != 2:
+            raise ProcessingError("Each source requires expected_size_wh: [width,height].")
+        for value in expected:
+            integer(value, "expected image size", 16, MAX_DIM)
+        if expected != [w, h]:
+            raise ProcessingError(f"Source {name} dimensions do not match the config. Reselect the corners.")
+        sha = digest(path)
+        pinned = info.get("sha256")
+        if pinned is not None and (not isinstance(pinned, str) or re.fullmatch(r"[a-fA-F0-9]{64}", pinned) is None):
+            raise ProcessingError("sha256 must be a 64-character hexadecimal string.")
+        if pinned is not None and pinned.lower() != sha:
+            raise ProcessingError(f"Source {name} SHA-256 mismatch. This recipe belongs to a different frame.")
+        if pinned is None:
+            warnings.append(f"Source {name} is not hash-locked: matching dimensions do not validate its corners or identity.")
+        info["path"] = str(path)
+        total_pixels += w * h
+        if total_pixels > 60_000_000:
+            raise ProcessingError("Combined decoded sources exceed the 60-megapixel job limit.")
+        images[name] = im
+        records.append({"name": name, "file": path.name, "sha256": sha, "size_wh": [w, h],
+                        "sha256_checked_against_config": pinned is not None})
+    groups: list[Group] = []
+    keys, used_ids = set(), set()
+    next_bit = 0
+    for c in containers:
+        object_keys(c, {"key", "container_id", "label", "method", "regions", "same_surface_confirmed",
+                        "exposure", "matching", "notes", "seam", "coverage"}, "container")
+        key = safe_key(c.get("key"), "container key")
+        if key in keys:
+            raise ProcessingError("Container keys must be unique.")
+        keys.add(key)
+        method = c.get("method")
+        if method not in ("rectify", "edge", "overlap"):
+            raise ProcessingError(f"Container {key}: method must be rectify, edge or overlap.")
+        rcfg = c.get("regions")
+        required_count = 1 if method == "rectify" else 2
+        if not isinstance(rcfg, list) or len(rcfg) != required_count:
+            raise ProcessingError(f"Container {key}: {method} requires exactly {required_count} region(s).")
+        if method != "rectify" and c.get("same_surface_confirmed") is not True:
+            raise ProcessingError(f"Container {key}: explicitly set same_surface_confirmed to true. "
+                                  "The selected sections must depict the same physical side of one container.")
+        ids = {v for v in [normalize_id(c.get("container_id"))] if v is not None}
+        regions: list[Region] = []
+        for r in rcfg:
+            object_keys(r, {"source", "view_box", "quad", "feature_quad", "container_id", "notes", "rectified_size_wh"}, "region")
+            name = r.get("source")
+            if not isinstance(name, str) or name not in images:
+                raise ProcessingError("Region references an unknown source.")
+            im = images[name]
+            box = r.get("view_box", [0, 0, im.shape[1], im.shape[0]])
+            if not isinstance(box, list) or len(box) != 4:
+                raise ProcessingError("view_box must be [x0,y0,x1,y1] with exclusive x1,y1.")
+            for v in box:
+                integer(v, "view_box coordinate", 0, MAX_DIM)
+            x0, y0, x1, y1 = box
+            if not (0 <= x0 < x1 <= im.shape[1] and 0 <= y0 < y1 <= im.shape[0]):
+                raise ProcessingError("view_box is outside its source image.")
+            view = im[y0:y1, x0:x1]
+            q = check_quad(r.get("quad"), x1 - x0, y1 - y0)
+            fq = check_quad(r.get("feature_quad", q), x1 - x0, y1 - y0)
+            if any(cv2.pointPolygonTest(q, tuple(map(float, p)), True) < -1.0 for p in fq):
+                raise ProcessingError("feature_quad must lie inside its selected region quad.")
+            explicit_size = r.get("rectified_size_wh")
+            if explicit_size is not None:
+                if not isinstance(explicit_size, list) or len(explicit_size) != 2:
+                    raise ProcessingError("rectified_size_wh must be [width,height].")
+                for n in explicit_size:
+                    integer(n, "rectified_size_wh", 16, MAX_DIM)
+                check_size(*explicit_size)
+                cross_index = 0 if config["direction"] == "vertical" else 1
+                if explicit_size[cross_index] != config["cross_size_px"]:
+                    raise ProcessingError("rectified_size_wh cross-axis dimension must equal cross_size_px.")
+            if next_bit >= MAX_REGIONS:
+                raise ProcessingError("No more than 16 regions per job.")
+            regions.append(Region(name, box, q, fq, view, 1 << next_bit, r))
+            next_bit += 1
+            normalized = normalize_id(r.get("container_id"))
+            if normalized is not None:
+                ids.add(normalized)
+        if len(ids) > 1:
+            raise ProcessingError(f"Container {key}: conflicting supplied IDs. Never stitch different containers together.")
+        if ids & used_ids:
+            raise ProcessingError("The same supplied container ID appears in separate physical-container groups.")
+        used_ids |= ids
+        if "same_surface_confirmed" in c:
+            boolean(c["same_surface_confirmed"], "same_surface_confirmed")
+        exposure = object_keys(c.get("exposure", {}), {"enabled", "sample_width", "exclude_seam_px",
+                               "sample_y_fraction", "fade_px", "max_gain"}, "exposure")
+        enabled = boolean(exposure.get("enabled", False), "exposure.enabled")
+        if enabled and method != "edge":
+            raise ProcessingError("Exposure balancing is only supported within an edge-joined container.")
+        if "matching" in c:
+            object_keys(c["matching"], {"ratio", "ransac_px", "min_inliers", "contrast_threshold", "feather_px",
+                                       "space", "feature_channel", "edge_threshold", "border_cross_px",
+                                       "border_axis_px", "max_cross_displacement_px"}, "matching")
+            if method != "overlap":
+                raise ProcessingError("matching settings are only valid for method overlap.")
+        if c.get("coverage", "unverified") not in ("visible_panel", "partial", "unverified"):
+            raise ProcessingError("coverage must be visible_panel, partial or unverified.")
+        seam = object_keys(c.get("seam", {}), {"policy", "position_px"}, "seam")
+        if seam and method != "overlap":
+            raise ProcessingError("seam settings are only valid for method overlap.")
+        if seam.get("policy", "union") not in ("union", "source_selected"):
+            raise ProcessingError("seam.policy must be union or source_selected.")
+        if "position_px" in seam:
+            integer(seam["position_px"], "seam.position_px", 0, MAX_DIM)
+            if seam.get("policy") != "source_selected":
+                raise ProcessingError("An explicit seam position requires source_selected policy.")
+        groups.append(Group(c, regions))
+    return config, images, records, groups, warnings
+
+
+def match_features(a: Region, b: Region, ratio: float = 0.72, contrast: float = 0.04
+                   ) -> tuple[Any, Any, list[Any]]:
+    sift = cv2.SIFT_create(nfeatures=6000, contrastThreshold=contrast)
+    ka, da = sift.detectAndCompute(cv2.cvtColor(a.image, cv2.COLOR_BGR2GRAY), a.feature_mask)
+    kb, db = sift.detectAndCompute(cv2.cvtColor(b.image, cv2.COLOR_BGR2GRAY), b.feature_mask)
+    if da is None or db is None or min(len(da), len(db)) < 2:
+        return ka, kb, []
+    bf = cv2.BFMatcher(cv2.NORM_L2)
+    forward = {m.queryIdx: m for pair in bf.knnMatch(db, da, k=2) if len(pair) == 2
+               for m, n in [pair] if m.distance < ratio * n.distance}
+    reverse = {m.queryIdx: m for pair in bf.knnMatch(da, db, k=2) if len(pair) == 2
+               for m, n in [pair] if m.distance < ratio * n.distance}
+    good, seen_a, seen_b = [], set(), set()
+    for m in sorted(forward.values(), key=lambda v: v.distance):
+        rev = reverse.get(m.trainIdx)
+        pa = tuple(round(v, 1) for v in ka[m.trainIdx].pt)
+        pb = tuple(round(v, 1) for v in kb[m.queryIdx].pt)
+        if rev is not None and rev.trainIdx == m.queryIdx and pa not in seen_a and pb not in seen_b:
+            good.append(m)
+            seen_a.add(pa)
+            seen_b.add(pb)
+    return ka, kb, good
+
+
+def save_matches(path: Path, a: Region, b: Region, ka: Any, kb: Any,
+                 matches: list[Any], status: np.ndarray | None = None) -> None:
+    viz = cv2.drawMatches(b.image, kb, a.image, ka, matches, None, flags=2,
+                         matchesMask=None if status is None else status.astype(int).tolist())
+    save_image(path, viz)
+
+
+def edge_diagnostic(a: Region, b: Region, out: Path) -> dict[str, Any]:
+    tests = []
+    for contrast in (0.04, 0.01, 0.005):
+        ka, kb, good = match_features(a, b, ratio=0.75, contrast=contrast)
+        tests.append({"contrast_threshold": contrast, "keypoints_left_right": [len(ka), len(kb)],
+                      "mutual_unique_candidates": len(good)})
+        if contrast == 0.01:
+            save_matches(out / "match_candidates_unverified.jpg", a, b, ka, kb, good)
+    best = max(t["mutual_unique_candidates"] for t in tests)
+    return {"kind": "diagnostic_only", "tests": tests, "best_mutual_unique_candidates": best,
+            "alignment_applied": False, "overlap_verified": False,
+            "note": "Candidate matches do not establish overlap. No inferred overlap is removed in edge mode."}
+
+
+def balance_edges(a: np.ndarray, b: np.ndarray, va: np.ndarray, vb: np.ndarray,
+                  cfg: dict[str, Any], enabled: bool
+                  ) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+    if not enabled:
+        return a, b, {"enabled": False}
+    limit = min(a.shape[1], b.shape[1])
+    strip = integer(cfg.get("sample_width", min(64, limit)), "sample_width", 8, limit)
+    margin = integer(cfg.get("exclude_seam_px", min(6, strip - 4)), "exclude_seam_px", 0, strip - 4)
+    fade = integer(cfg.get("fade_px", 160), "fade_px", 1, MAX_DIM)
+    fractions = cfg.get("sample_y_fraction", [0.12, 0.87])
+    if not isinstance(fractions, list) or len(fractions) != 2:
+        raise ProcessingError("sample_y_fraction must be [start,end].")
+    f0, f1 = [number(v, "sample_y_fraction", 0, 1) for v in fractions]
+    if f0 >= f1:
+        raise ProcessingError("Exposure band start must precede end.")
+    h = a.shape[0]
+    y0, y1 = int(h * f0), int(h * f1)
+    if y1 - y0 < 4:
+        raise ProcessingError("Exposure sample band is too small.")
+    sa = (slice(y0, y1), slice(a.shape[1] - strip, a.shape[1] - margin))
+    sb = (slice(y0, y1), slice(margin, strip))
+    pa, pb = a[sa][va[sa]], b[sb][vb[sb]]
+    if min(len(pa), len(pb)) < 32:
+        raise ProcessingError("Too few valid exposure samples; disable balancing or adjust sample bands.")
+    med_a, med_b = np.median(pa, axis=0), np.median(pb, axis=0)
+    if min(float(med_a.min()), float(med_b.min())) < 2:
+        raise ProcessingError("Near-black exposure strip; disable balancing or select another region.")
+    max_gain = number(cfg.get("max_gain", 1.6), "max_gain", 1, 4)
+    target = np.sqrt(med_a * med_b)
+    ga = np.clip(target / med_a, 1 / max_gain, max_gain)
+    gb = np.clip(target / med_b, 1 / max_gain, max_gain)
+    ta = np.clip(1 - np.arange(a.shape[1] - 1, -1, -1, dtype=np.float32) / fade, 0, 1)
+    tb = np.clip(1 - np.arange(b.shape[1], dtype=np.float32) / fade, 0, 1)
+    ta, tb = ta * ta * (3 - 2 * ta), tb * tb * (3 - 2 * tb)
+    aa = a * (1 + ta[None, :, None] * (ga - 1)[None, None, :])
+    bb = b * (1 + tb[None, :, None] * (gb - 1)[None, None, :])
+    return aa, bb, {
+        "enabled": True, "method": "median-channel gain with smoothstep taper inside each section",
+        "assumption": "Adjacent strips show comparable paint, NOT confirmed identical scene pixels.",
+        "cross_source_pixel_blending": False,
+        "left_median_bgr": med_a.tolist(), "right_median_bgr": med_b.tolist(),
+        "left_gain_at_seam_bgr": ga.tolist(), "right_gain_at_seam_bgr": gb.tolist(),
+        "fade_width_px": fade,
+        "clipped_channel_values": int(np.count_nonzero(aa[va] > 255) + np.count_nonzero(bb[vb] > 255)),
+    }
+
+
+def projected_quad(q: np.ndarray, H: np.ndarray) -> np.ndarray:
+    if H.shape != (3, 3) or not np.isfinite(H).all() or abs(np.linalg.det(H)) < 1e-12:
+        raise ProcessingError("Invalid or singular homography.")
+    denominator = np.c_[q, np.ones(4)] @ H[2]
+    if not (np.all(denominator > 1e-6) or np.all(denominator < -1e-6)):
+        raise ProcessingError("Homography crosses a projective horizon.")
+    transformed = cv2.perspectiveTransform(q[None].astype(np.float64), H)[0].astype(np.float32)
+    if not np.isfinite(transformed).all() or not cv2.isContourConvex(transformed):
+        raise ProcessingError("Folded or invalid projected boundary.")
+    if cv2.contourArea(transformed, oriented=True) <= 0:
+        raise ProcessingError("Reflected or collapsed projected boundary.")
+    return transformed
+
+
+def blend(a: np.ndarray, va: np.ndarray, b: np.ndarray, vb: np.ndarray,
+          feather: int) -> tuple[np.ndarray, np.ndarray]:
+    overlap = va & vb
+    if np.count_nonzero(overlap) < 512:
+        raise ProcessingError("Insufficient valid pixel overlap; no invented join or automatic fallback is allowed.")
+    xx = np.arange(va.shape[1], dtype=np.float32)[None, :]
+    lo = np.where(overlap, xx, np.inf).min(axis=1)
+    hi = np.where(overlap, xx, -np.inf).max(axis=1)
+    rows = overlap.any(axis=1)
+    mid = np.zeros(va.shape[0], np.float32)
+    mid[rows] = (lo[rows] + hi[rows]) / 2
+    if feather == 0:
+        t = (xx >= mid[:, None]).astype(np.float32)
+    else:
+        effective = np.ones(va.shape[0], np.float32)
+        effective[rows] = np.maximum(1, np.minimum(feather, hi[rows] - lo[rows]))
+        t = np.clip((xx - mid[:, None]) / effective[:, None] + 0.5, 0, 1)
+    t[~vb] = 0
+    t[vb & ~va] = 1
+    return a * (1 - t[..., None]) + b * t[..., None], t
+
+
+def matching_rectified(a: Region, b: Region, cross_size: int, direction: str,
+                       cfg: dict[str, Any]) -> tuple[Any, ...]:
+    """Rectify for feature estimation only; final image is warped once from source pixels."""
+    channel = cfg.get("feature_channel", "gray")
+    if channel not in ("gray", "green"):
+        raise ProcessingError("feature_channel must be gray or green.")
+    contrast = number(cfg.get("contrast_threshold", 0.008), "contrast_threshold", 0.001, 0.1)
+    edge = number(cfg.get("edge_threshold", 18), "edge_threshold", 1, 100)
+    ratio = number(cfg.get("ratio", 0.8), "ratio", 0.5, 0.9)
+    bc = integer(cfg.get("border_cross_px", 12), "border_cross_px", 1, 512)
+    ba = integer(cfg.get("border_axis_px", 10), "border_axis_px", 1, 512)
+    max_cross = cfg.get("max_cross_displacement_px")
+    if max_cross is not None:
+        max_cross = number(max_cross, "max_cross_displacement_px", 0.1, 4096)
+    sift = cv2.SIFT_create(nfeatures=20000, contrastThreshold=contrast, edgeThreshold=edge)
+    views, transforms, masks, keypoints, descriptors = [], [], [], [], []
+    for r in (a, b):
+        R, size = rectification_axis(r.quad, cross_size, direction, r.config.get("rectified_size_wh"))
+        # This 8-bit representation is ONLY for finding features, never the final stitched pixels.
+        im = cv2.warpPerspective(r.image, R, size, flags=cv2.INTER_LINEAR)
+        mask = cv2.warpPerspective(r.feature_mask, R, size, flags=cv2.INTER_NEAREST)
+        by, bx = (ba, bc) if direction == "vertical" else (bc, ba)
+        if min(size[0]-2*bx, size[1]-2*by) < 8:
+            raise ProcessingError("Rectified feature-mask borders leave too little interior.")
+        mask[:by] = mask[-by:] = 0
+        mask[:, :bx] = mask[:, -bx:] = 0
+        feature_image = im[..., 1] if channel == "green" else cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
+        k, d = sift.detectAndCompute(feature_image, mask)
+        views.append(im); transforms.append(R); masks.append(mask)
+        keypoints.append(k); descriptors.append(d)
+    ka, kb = keypoints
+    da, db = descriptors
+    matches = []
+    if da is not None and db is not None and min(len(da), len(db)) >= 2:
+        bf = cv2.BFMatcher(cv2.NORM_L2)
+        reverse = {m.queryIdx: m.trainIdx for pair in bf.knnMatch(da, db, k=2) if len(pair) == 2
+                   for m, n in [pair] if m.distance < ratio*n.distance}
+        candidates = [m for pair in bf.knnMatch(db, da, k=2) if len(pair) == 2
+                      for m, n in [pair] if m.distance < ratio*n.distance and reverse.get(m.trainIdx) == m.queryIdx]
+        seen_a, seen_b = set(), set()
+        cross_axis = 0 if direction == "vertical" else 1
+        for m in sorted(candidates, key=lambda v: v.distance):
+            pa, pb = ka[m.trainIdx].pt, kb[m.queryIdx].pt
+            if max_cross is not None and abs(pa[cross_axis]-pb[cross_axis]) >= max_cross:
+                continue
+            # Multiple SIFT orientations at one location do not count as independent evidence.
+            qa, qb = tuple(np.rint(pa).astype(int)), tuple(np.rint(pb).astype(int))
+            if qa not in seen_a and qb not in seen_b:
+                seen_a.add(qa); seen_b.add(qb); matches.append(m)
+    return ka, kb, matches, transforms, views, masks
+
+
+def source_selected_blend(a: np.ndarray, va: np.ndarray, b: np.ndarray, vb: np.ndarray,
+                          direction: str, feather: int, position: int | None = None
+                          ) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
+    """Choose first source before the seam, second after it; leave missing support transparent."""
+    # Canonical representation: length runs along array rows, width across columns.
+    swap = direction == "horizontal"
+    if swap:
+        a, va, b, vb = [np.swapaxes(v, 0, 1) for v in (a, va, b, vb)]
+    overlap = va & vb
+    support = overlap.sum(axis=1)
+    threshold = .85 * min(va.sum(axis=1).max(), vb.sum(axis=1).max())
+    rows = np.flatnonzero((support >= threshold) & (support > 0))
+    half = max(4, feather//2)
+    length, width = va.shape
+    if len(rows) < max(feather+4, 32):
+        raise ProcessingError("Not enough broad overlap for a source-selected seam.")
+    def score(at: int) -> float:
+        if at < half or at+half >= length:
+            raise ProcessingError("Requested seam is outside the supported canvas.")
+        valid = overlap[at-half:at+half]
+        if valid.mean() < .75:
+            raise ProcessingError("Requested seam lacks sufficient overlap.")
+        return float(np.abs(a[at-half:at+half][valid]-b[at-half:at+half][valid]).mean())
+    if position is None:
+        first_end = int(np.flatnonzero(va.any(axis=1))[-1])
+        start = max(int(rows[0])+half, int(rows[0]+.40*(first_end-rows[0])))
+        end = min(int(rows[-1])-half, first_end-half-4)
+        candidates = []
+        for pos in range(start, end+1):
+            if overlap[pos-half:pos+half].mean() >= .80:
+                candidates.append((score(pos), pos))
+        if not candidates:
+            raise ProcessingError("No supported source-selected seam was found.")
+        difference, seam = min(candidates)
+    else:
+        seam = position
+        difference = score(seam)
+    along = np.arange(length, dtype=np.float32)[:, None]
+    initial_b = ((along >= seam).astype(np.float32) if feather == 0 else
+                 np.clip((along-seam)/feather+.5, 0, 1))
+    first = (1-initial_b)*va
+    second = initial_b*vb
+    total = first+second
+    valid = total > 1e-6
+    t = np.divide(second, total, out=np.zeros_like(second), where=valid)
+    pixels = a*(1-t[..., None])+b*t[..., None]
+    pixels[~valid] = 0
+    t[~valid] = 0
+    report = {"policy": "source_selected", "position_px": int(seam),
+              "axis": "y" if direction == "vertical" else "x",
+              "selection": "automatic_pixel_difference" if position is None else "configured",
+              "feather_px": feather, "mean_abs_seam_difference_0_255": difference,
+              "union_pixels_omitted_by_selection": int(np.count_nonzero((va | vb) & ~valid)),
+              "note": "First source before seam; second after. No stale first-view strips beyond seam."}
+    if swap:
+        pixels, valid, t = [np.swapaxes(v, 0, 1) for v in (pixels, valid, t)]
+    return pixels, valid, t, report
+
+
+def directional_blend(a: np.ndarray, va: np.ndarray, b: np.ndarray, vb: np.ndarray,
+                      direction: str, feather: int, seam_cfg: dict[str, Any]
+                      ) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
+    if seam_cfg.get("policy", "union") == "source_selected":
+        return source_selected_blend(a, va, b, vb, direction, feather, seam_cfg.get("position_px"))
+    if direction == "vertical":
+        p, t = blend(np.swapaxes(a, 0, 1), va.T, np.swapaxes(b, 0, 1), vb.T, feather)
+        p, t = np.swapaxes(p, 0, 1), t.T
+    else:
+        p, t = blend(a, va, b, vb, feather)
+    return p, va | vb, t, {"policy": "union", "selection": "per_crossline_overlap_midpoint",
+                           "feather_px": feather, "axis": "y" if direction == "vertical" else "x"}
+
+
+def overlap_group(group: Group, cross_size: int, out: Path, direction: str = "horizontal") -> Tile:
+    a, b = group.regions
+    cfg = group.config.get("matching", {})
+    space = cfg.get("space", "source")
+    if space not in ("source", "rectified"):
+        raise ProcessingError("matching.space must be source or rectified.")
+    rectified_only = {"feature_channel", "edge_threshold", "border_cross_px", "border_axis_px", "max_cross_displacement_px"}
+    if space == "source" and rectified_only & set(cfg):
+        raise ProcessingError("Rectified feature settings require matching.space: rectified.")
+    ratio = number(cfg.get("ratio", 0.8 if space == "rectified" else .72), "ratio", 0.5, 0.9)
+    threshold = number(cfg.get("ransac_px", 3.0), "ransac_px", 0.1, 20)
+    minimum = integer(cfg.get("min_inliers", 20), "min_inliers", 8, 20000)
+    contrast = number(cfg.get("contrast_threshold", .008 if space == "rectified" else .04),
+                      "contrast_threshold", .001, .1)
+    feather = integer(cfg.get("feather_px", 32), "feather_px", 0, 512)
+    if space == "rectified":
+        ka, kb, matches, transforms, views, masks = matching_rectified(a, b, cross_size, direction, cfg)
+        RA, RB = transforms
+        for index, im in enumerate(views, 1):
+            save_image(out / f"matching_rectified_{index}.png", im)
+    else:
+        ka, kb, matches = match_features(a, b, ratio, contrast)
+        views, masks = [a.image, b.image], [a.feature_mask, b.feature_mask]
+        RA = RB = np.eye(3)
+    stats: dict[str, Any] = {"keypoints_first_second": [len(ka), len(kb)],
+                            "mutual_unique_candidates": len(matches), "matching_space": space,
+                            "residual_coordinate_space": f"first {space} image pixels",
+                            "feature_channel": cfg.get("feature_channel", "gray"),
+                            "max_cross_displacement_px": cfg.get("max_cross_displacement_px"),
+                            "thresholds": {"ratio": ratio, "ransac_px": threshold, "min_inliers": minimum,
+                                           "min_inlier_ratio": .35, "contrast_threshold": contrast}}
+    if direction == "horizontal":
+        stats["keypoints_left_right"] = [len(ka), len(kb)]
+    if len(matches) < minimum:
+        raise ProcessingError(f"Only {len(matches)} unique symmetric matches; need {minimum} for overlap mode.", stats)
+    src = np.float32([kb[m.queryIdx].pt for m in matches])
+    dst = np.float32([ka[m.trainIdx].pt for m in matches])
+    Hfit, status = cv2.findHomography(src, dst, cv2.RANSAC, threshold,
+                                     maxIters=30000 if space == "rectified" else 5000, confidence=.999)
+    if Hfit is None or status is None:
+        raise ProcessingError("RANSAC could not estimate an overlap homography.", stats)
+    good = status.ravel().astype(bool)
+    stats.update(inliers=int(good.sum()), inlier_ratio=float(good.mean()))
+    if good.sum() < minimum or good.mean() < .35:
+        raise ProcessingError(f"Weak overlap fit: {int(good.sum())}/{len(matches)} inliers.", stats)
+    coverage = []
+    for pts, mask in [(src[good], masks[1]), (dst[good], masks[0])]:
+        area = cv2.contourArea(cv2.convexHull(pts))
+        frac = float(area / max(1, np.count_nonzero(mask)))
+        coverage.append(frac)
+        if frac < .02 or (space == "rectified" and area < 1000):
+            raise ProcessingError("Inliers are too concentrated to trust a homography.", stats)
+    stats["inlier_hull_area_fraction_second_first"] = coverage
+    H = np.linalg.inv(RA) @ Hfit @ RB
+    if not np.isfinite(H).all() or abs(float(H[2, 2])) < 1e-12:
+        raise ProcessingError("Unstable homography normalization.", stats)
+    H /= H[2, 2]
+    raw_boundary = projected_quad(b.quad, H)
+    scale = cv2.contourArea(raw_boundary)/cv2.contourArea(b.quad)
+    if not .25 <= scale <= 4:
+        raise ProcessingError("Implausible relative camera scale (area ratio outside 0.25..4).", stats)
+    HA = (RA if space == "rectified" else
+          rectification_axis(a.quad, cross_size, direction, a.config.get("rectified_size_wh"))[0])
+    qa, qb = projected_quad(a.quad, HA), projected_quad(b.quad, HA @ H)
+    top = qb[1]-qb[0]
+    angle = math.degrees(math.atan2(float(top[1]), float(top[0])))
+    if abs(angle) > 20:
+        raise ProcessingError("Estimated rectified cross-edge rotation exceeds 20 degrees.", stats)
+    axis = 1 if direction == "vertical" else 0
+    span = float(qa[:, axis].max()-qa[:, axis].min()+1)
+    if (qb[:, axis].mean() <= qa[:, axis].mean()+max(2, .05*span)
+            or qb[:, axis].max() <= qa[:, axis].max()+max(2, .02*span)):
+        word = "downward" if direction == "vertical" else "rightward"
+        raise ProcessingError(f"Second region does not extend {word}; check order and identity.", stats)
+    error = np.linalg.norm(cv2.perspectiveTransform(src[good][None], Hfit)[0]-dst[good], axis=1)
+    if float(np.median(error)) > threshold or float(np.percentile(error, 95)) > 2*threshold:
+        raise ProcessingError("Large reprojection residuals despite an apparent feature fit.", stats)
+    corners = np.vstack([qa, qb]).astype(np.float64)
+    near_int = np.abs(corners-np.rint(corners)) < .001
+    corners[near_int] = np.rint(corners[near_int])
+    low, high = np.floor(corners.min(axis=0)).astype(int), np.ceil(corners.max(axis=0)).astype(int)
+    width, height = map(int, high-low+1)
+    check_size(width, height)
+    T = np.float64([[1, 0, -low[0]], [0, 1, -low[1]], [0, 0, 1]])
+    WA, WB = T @ HA, T @ HA @ H
+    aa, va = warp(a.image, a.mask, WA, (width, height))
+    bb, vb = warp(b.image, b.mask, WB, (width, height))
+    fraction = float(np.count_nonzero(va & vb)/max(1, min(np.count_nonzero(va), np.count_nonzero(vb))))
+    if fraction < .05:
+        raise ProcessingError("Less than 5% valid selected-surface overlap.", stats)
+    seam_cfg = group.config.get("seam", {})
+    pixels, valid, t, seam_report = directional_blend(aa, va, bb, vb, direction, feather, seam_cfg)
+    hard_cfg = dict(seam_cfg)
+    if seam_report["policy"] == "source_selected":
+        hard_cfg["position_px"] = seam_report["position_px"]
+    hard, hard_valid, _, _ = directional_blend(aa, va, bb, vb, direction, 0, hard_cfg)
+    provenance = np.zeros(valid.shape, np.uint16)
+    provenance[valid & va & (t < 1)] |= np.uint16(a.bit)
+    provenance[valid & vb & (t > 0)] |= np.uint16(b.bit)
+    save_image(out / "hard_seam.png", bgra(hard, hard_valid))
+    save_image(out / "warped_first.png", bgra(aa, va))
+    save_image(out / "warped_second.png", bgra(bb, vb))
+    weights = np.rint(t*65535).astype(np.uint16)
+    save_image(out / "second_weight_16bit.png", weights)
+    if direction == "horizontal":  # v1 diagnostic filename compatibility
+        save_image(out / "right_weight_16bit.png", weights)
+    viz = cv2.drawMatches(views[1], kb, views[0], ka, matches, None, flags=2,
+                          matchesMask=good.astype(int).tolist())
+    save_image(out / "feature_matches.jpg", viz)
+    stats.update(median_reprojection_error_px=float(np.median(error)), max_reprojection_error_px=float(error.max()),
+                 homography_second_view_to_first_view=H.tolist(),
+                 homography_second_matching_to_first_matching=Hfit.tolist(),
+                 inlier_coordinates_second=src[good].tolist(), inlier_coordinates_first=dst[good].tolist(),
+                 overlap_fraction_of_smaller_warp=fraction, feather_px=feather, geometric_checks_passed=True)
+    if direction == "horizontal":
+        stats["homography_right_view_to_left_view"] = H.tolist()
+    warnings = ["Passing geometry checks does not prove correct physical correspondence.",
+                "Repeated corrugations and branding can yield convincing false fits.",
+                "Review feature_matches.jpg and hard_seam.png; no camera calibration or identity verification was performed."]
+    if int(good.sum()) < 20:
+        warnings.append("Limited feature support: fewer than 20 inliers. Sample-specific lower minimum was explicitly configured.")
+    report = {"method": "overlap", "status": "overlap_estimated_requires_visual_review",
+              "overlap_alignment_applied": True, "independently_verified_overlap": False,
+              "same_surface_confirmed_by_operator": True, "matching": stats, "seam": seam_report,
+              "exposure": {"enabled": False}, "regions": [a.report(WA), b.report(WB)], "warnings": warnings}
+    image = bgra(pixels, valid)
+    return Tile(image, image.copy(), provenance, report)
+
+
+def process_group(group: Group, cross_size: int, out: Path, no_balance: bool,
+                  direction: str = "horizontal") -> Tile:
+    method = group.config["method"]
+    out.mkdir(parents=True, exist_ok=True)
+    if method == "overlap":
+        return overlap_group(group, cross_size, out, direction)
+    warped, valids, transforms = [], [], []
+    for index, region in enumerate(group.regions, 1):
+        H, size = rectification_axis(region.quad, cross_size, direction, region.config.get("rectified_size_wh"))
+        pixels, valid = warp(region.image, region.mask, H, size)
+        warped.append(pixels); valids.append(valid); transforms.append(H)
+        save_image(out / f"section_{index}_geometry.png", bgra(pixels, valid))
+    array_axis = 0 if direction == "vertical" else 1
+    output_length = sum(p.shape[array_axis] for p in warped)
+    check_size(cross_size, output_length) if direction == "vertical" else check_size(output_length, cross_size)
+    geometry = np.concatenate([bgra(p, v) for p, v in zip(warped, valids)], axis=array_axis)
+    if method == "rectify":
+        image = geometry.copy()
+        provenance = np.where(valids[0], group.regions[0].bit, 0).astype(np.uint16)
+        report = {"method": "rectify", "status": "rectified_visible_panel",
+                  "overlap_alignment_applied": False, "independently_verified_overlap": False,
+                  "exposure": {"enabled": False}, "regions": [group.regions[0].report(transforms[0])],
+                  "warnings": ["Manually selected visible panel; no new surface coverage was reconstructed."]}
+    else:
+        a, b = group.regions
+        cfg = group.config.get("exposure", {})
+        if direction == "vertical":
+            args = [np.swapaxes(p, 0, 1) for p in (*warped, *valids)]
+            aa, bb, exposure = balance_edges(*args, cfg, enabled=cfg.get("enabled", False) and not no_balance)
+            aa, bb = np.swapaxes(aa, 0, 1), np.swapaxes(bb, 0, 1)
+            exposure["coordinate_note"] = "Legacy left/right gain names refer to first/top and second/bottom; sample_y_fraction is across the roof width."
+        else:
+            aa, bb, exposure = balance_edges(*warped, *valids, cfg,
+                                             enabled=cfg.get("enabled", False) and not no_balance)
+        image = np.concatenate([bgra(aa, valids[0]), bgra(bb, valids[1])], axis=array_axis)
+        provenance = np.concatenate([np.where(v, r.bit, 0).astype(np.uint16)
+                                     for v, r in zip(valids, group.regions)], axis=array_axis)
+        seam = warped[0].shape[array_axis]
+        offset = np.float64([[1, 0, seam if direction == "horizontal" else 0],
+                             [0, 1, seam if direction == "vertical" else 0], [0, 0, 1]])
+        diagnostic = edge_diagnostic(a, b, out)
+        report = {"method": "edge", "status": "manual_edge_join_unverified",
+                  "overlap_alignment_applied": False, "independently_verified_overlap": False,
+                  "same_surface_confirmed_by_operator": True,
+                  "join_y" if direction == "vertical" else "join_x": seam,
+                  "exposure": exposure, "overlap_diagnostic": diagnostic,
+                  "regions": [a.report(transforms[0]), b.report(offset @ transforms[1])],
+                  "warnings": ["No overlap was established or removed; edge adjacency comes from the configuration.",
+                               "Physical proportions, surface continuity and corrugation count at the seam are unverified.",
+                               "Exposure balancing assumes comparable paint and can alter appearance near the seam."]}
+    check_size(image.shape[1], image.shape[0])
+    return Tile(image, geometry, provenance, report)
+
+
+def run_job(config_path: Path | str, out: Path | str, *, mode: str | None = None,
+            input_path: Path | str | None = None, source_overrides: dict[str, Path] | None = None,
+            no_balance: bool = False, direction: str | None = None) -> dict[str, Any]:
+    """Process a trusted local JSON job; return the committed report or raise ProcessingError.
+
+    The output path MUST NOT exist. A failed job leaves only report.json with
+    status=rejected; no final/partial composites are published. Use one process
+    per job for parallel workers (OpenCV thread/RNG configuration is global).
+    """
+    config_path, out = Path(config_path).resolve(), Path(out).resolve()
+    if out.exists():
+        raise ProcessingError("Output path already exists. Use a new directory to avoid stale results.")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.mkdir()  # Reserve exclusively, so we never overwrite someone else's images or reports.
+    stage = Path(tempfile.mkdtemp(prefix=".work-", dir=out))
+    published: list[Path] = []
+    current = None
+    try:
+        boolean(no_balance, "no_balance")
+        cv2.setNumThreads(1)
+        cv2.setRNGSeed(7)
+        config, images, source_records, groups, warnings = load_job(
+            config_path, mode, Path(input_path) if input_path is not None else None, source_overrides, direction)
+        tiles = []
+        cross_size, gap = config["cross_size_px"], config["gap_px"]
+        for group in groups:
+            current = group.config["key"]
+            tile = process_group(group, cross_size, stage / "containers" / current, no_balance, config["direction"])
+            tile.report.update(key=current, container_id=group.config.get("container_id"),
+                               label=group.config.get("label", current), coverage=group.config.get("coverage", "unverified"),
+                               notes=group.config.get("notes", ""), direction=config["direction"],
+                               output_size_wh=[tile.image.shape[1], tile.image.shape[0]])
+            sub = stage / "containers" / current
+            save_image(sub / "result.png", tile.image)
+            save_image(sub / "geometry_only.png", tile.geometry)
+            save_image(sub / "source_map_16bit.png", tile.sources)
+            tiles.append(tile)
+        current = None
+        horizontal_layout = config["layout"] == "horizontal"
+        width = (sum(t.image.shape[1] for t in tiles) + gap * (len(tiles) - 1)
+                 if horizontal_layout else max(t.image.shape[1] for t in tiles))
+        height = (max(t.image.shape[0] for t in tiles) if horizontal_layout else
+                  sum(t.image.shape[0] for t in tiles) + gap * (len(tiles) - 1))
+        check_size(width, height)
+        canvas, geometry = np.zeros((height, width, 4), np.uint8), np.zeros((height, width, 4), np.uint8)
+        source_map, container_map = np.zeros((height, width), np.uint16), np.zeros((height, width), np.uint8)
+        x = y = 0
+        provenance_keys: dict[str, Any] = {}
+        for index, tile in enumerate(tiles, 1):
+            h, w = tile.image.shape[:2]
+            canvas[y:y+h, x:x+w], geometry[y:y+h, x:x+w] = tile.image, tile.geometry
+            source_map[y:y+h, x:x+w] = tile.sources
+            container_map[y:y+h, x:x+w] = np.where(tile.image[..., 3] > 0, index, 0)
+            L = np.float64([[1, 0, x], [0, 1, y], [0, 0, 1]])
+            tile.report["output_box_xyxy_exclusive"] = [x, y, x + w, y + h]
+            for r in tile.report["regions"]:
+                H = np.asarray(r["input_to_container_homography"], np.float64)
+                r["input_to_final_homography"] = (L @ H).tolist()
+                provenance_keys[str(r["source_bit"])] = {
+                    "container_key": tile.report["key"], "source": r["source"],
+                    "view_box_xyxy_exclusive": r["view_box_xyxy_exclusive"],
+                }
+            write_json(stage / "containers" / tile.report["key"] / "report.json", tile.report)
+            if horizontal_layout:
+                x += w + gap
+            else:
+                y += h + gap
+        save_image(stage / "result.png", canvas)
+        save_image(stage / "geometry_only.png", geometry)
+        save_image(stage / "source_map_16bit.png", source_map)
+        save_image(stage / "container_map.png", container_map)
+        for name, im in images.items():
+            annotated = im.copy()
+            for group in groups:
+                for i, r in enumerate(group.regions, 1):
+                    if r.source != name:
+                        continue
+                    q = r.quad + np.float32(r.box[:2])
+                    cv2.polylines(annotated, [np.rint(q).astype(np.int32)], True, (0, 210, 255), 2)
+                    for j, pt in enumerate(q):
+                        xx, yy = np.rint(pt).astype(int)
+                        cv2.circle(annotated, (int(xx), int(yy)), 4, (0, 210, 255), -1)
+                        cv2.putText(annotated, str(j), (int(xx) + 4, int(yy) + 15),
+                                    cv2.FONT_HERSHEY_SIMPLEX, .45, (0, 210, 255), 1, cv2.LINE_AA)
+                    xx, yy = np.rint(q[0]).astype(int)
+                    cv2.putText(annotated, f"{group.config['key']}/{i}", (int(xx) + 6, int(yy) + 30),
+                                cv2.FONT_HERSHEY_SIMPLEX, .48, (0, 210, 255), 1, cv2.LINE_AA)
+            save_image(stage / "selected_regions" / f"{name}.jpg", annotated)
+        write_json(stage / "resolved_config.json", config)
+        method_statuses = [t.report.get("status", "unknown") for t in tiles]
+        if any(v == "manual_edge_join_unverified" for v in method_statuses):
+            quality_state = "unverified_edge_composite"
+            quality_label = "Created, but overlap was not verified"
+        elif any(v == "overlap_estimated_requires_visual_review" for v in method_statuses):
+            quality_state = "overlap_requires_visual_review"
+            quality_label = "Overlap estimated; visual review required"
+        elif all(v == "rectified_visible_panel" for v in method_statuses):
+            quality_state = "rectified_only"
+            quality_label = "Rectified visible panel; no stitch was needed"
+        else:
+            quality_state = "requires_review"
+            quality_label = "Created; review required"
+        report = {
+            "schema_version": 2, "program_version": VERSION, "status": "created_requires_review",
+            "processing_state": "created", "quality_state": quality_state, "quality_label": quality_label,
+            "mode": config["mode"], "direction": config["direction"], "layout": config["layout"],
+            "cross_size_px": cross_size, "physical_container_count": len(groups),
+            "mode_and_identity_source": "explicit configuration/operator input; not automatic detection or OCR",
+            "source_records": source_records, "config_sha256": digest(config_path),
+            "opencv_version": cv2.__version__, "numpy_version": np.__version__,
+            "output_size_wh": [width, height], "result_file": "result.png",
+            "gap_px": gap if len(groups) > 1 else 0,
+            "gap_meaning": "Transparent layout separator, NOT measured physical space.",
+            "same_height_rescaling_after_stitch": False, "rescaling_after_stitch": False, "cross_container_blending": False,
+            "independently_verified_overlap": False,
+            "source_map_encoding": {"format": "uint16 bitmask", "zero": "no source; transparent",
+                                    "bits": provenance_keys,
+                                    "combination_rule": "bitwise OR when pixels are weighted from both regions",
+                                    "weight_file": "For overlap groups, containers/<key>/second_weight_16bit.png stores second-region weight / 65535, only at valid output pixels."},
+            "container_map_values": {"0": "no container/transparent", **{
+                str(i): t.report["key"] for i, t in enumerate(tiles, 1)}},
+            "containers": [t.report for t in tiles],
+            "warnings": warnings + [
+                "Manual corners are frame-specific; matching image dimensions alone are insufficient.",
+                "Warping resamples pixels. Keep original captures for inspection and audit.",
+                "Not calibrated for dimensions, gap size, damage measurement or corrugation count.",
+                "No automatic single/combo detection, container identity verification, or correspondence proof.",
+                "Direction and combo layout are explicit settings; partial coverage is not reconstructed.",
+            ],
+            "not_performed": ["generative fill", "inpainting", "OCR", "lettering replacement",
+                              "learned super-resolution", "automatic container detection", "cross-container matching"],
+            "no_balance_override": bool(no_balance),
+        }
+        # Publish only after EVERY container succeeds. report.json commits last.
+        for path in list(stage.iterdir()):
+            target = out / path.name
+            path.rename(target)
+            published.append(target)
+        stage.rmdir()
+        write_json(out / "report.json", report)
+        return report
+    except (ProcessingError, OSError, ValueError, TypeError, KeyError, cv2.error) as exc:
+        for path in published:
+            if path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                path.unlink(missing_ok=True)
+        shutil.rmtree(stage, ignore_errors=True)
+        details = exc.details if isinstance(exc, ProcessingError) else {}
+        rejection = {"status": "rejected", "program_version": VERSION, "reason": str(exc),
+                     "container_key": current, "details": details, "result_created": False,
+                     "fallback_to_edge": False}
+        try:
+            write_json(out / "report.json", rejection)
+        except OSError:
+            pass
+        raise ProcessingError(str(exc), rejection) from exc
+
+
+def run_batch(batch_path: Path | str, out: Path | str, *, no_balance: bool = False) -> dict[str, Any]:
+    """Run explicit local recipes independently; publish a batch summary last.
+
+    A failed job never becomes an edge join. Other jobs continue. This is not an
+    all-or-nothing transaction across jobs: require batch_report.json to know that
+    the batch completed, and each job's report.json to know that job's status.
+    """
+    boolean(no_balance, "no_balance")
+    batch_path, out = Path(batch_path).resolve(), Path(out).resolve()
+    manifest = json.loads(batch_path.read_text(encoding="utf-8"))
+    object_keys(manifest, {"schema_version", "jobs", "notes"}, "batch")
+    integer(manifest.get("schema_version"), "batch.schema_version", 1, 1)
+    jobs = manifest.get("jobs")
+    if not isinstance(jobs, list) or not 1 <= len(jobs) <= 64:
+        raise ProcessingError("batch.jobs requires 1..64 named recipes.")
+    seen, checked = set(), []
+    for item in jobs:
+        object_keys(item, {"key", "config"}, "batch job")
+        key = safe_key(item.get("key"), "batch job key")
+        if key in seen:
+            raise ProcessingError("Batch job keys must be unique.")
+        seen.add(key)
+        if not isinstance(item.get("config"), str) or not item["config"]:
+            raise ProcessingError("Each batch job requires a nonempty config path.")
+        path = (batch_path.parent / item["config"]).resolve()
+        if not path.is_file():
+            raise ProcessingError(f"Batch recipe not found: {path}")
+        checked.append((key, path))
+    if out.exists():
+        raise ProcessingError("Output path already exists. Use a new directory to avoid stale results.")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.mkdir()
+    rows = []
+    for key, path in checked:
+        try:
+            report = run_job(path, out / key, no_balance=no_balance)
+            rows.append({"key": key, "status": report["status"], "mode": report["mode"],
+                         "direction": report["direction"], "container_count": report["physical_container_count"],
+                         "size_wh": report["output_size_wh"], "result_file": f"{key}/result.png",
+                         "report_file": f"{key}/report.json"})
+        except (ProcessingError, OSError) as exc:
+            rows.append({"key": key, "status": "rejected", "reason": str(exc),
+                         "result_created": False, "report_file": f"{key}/report.json"})
+    rejected = sum(r["status"] == "rejected" for r in rows)
+    summary = {"program_version": VERSION, "status": "batch_complete_requires_review" if rejected == 0 else "batch_has_rejections",
+               "jobs_total": len(rows), "jobs_created": len(rows)-rejected, "jobs_rejected": rejected,
+               "manifest_sha256": digest(batch_path), "no_balance_override": no_balance,
+               "jobs": rows, "note": "Each job is independent. Completion/fit does not prove physical correctness."}
+    write_json(out / "batch_report.json", summary)
+    return summary
+
+
+def parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--version", action="version", version=f"container_stitch {VERSION}")
+    task = p.add_mutually_exclusive_group(required=True)
+    task.add_argument("--config", type=Path, help="Unified JSON recipe (schema 1 or 2), or an earlier horizontal config")
+    task.add_argument("--batch", type=Path, help="Batch manifest listing named recipes; writes a batch_report.json")
+    p.add_argument("--out", type=Path, required=True, help="NEW output directory (must not exist)")
+    p.add_argument("--mode", choices=["single", "combo"], help="Assert the recipe's mode; mismatch is an error")
+    p.add_argument("--direction", choices=["horizontal", "vertical"], help="Assert recipe direction; does not rotate or reinterpret selections")
+    p.add_argument("--input", type=Path, help="Override a sole source; required with an earlier config")
+    p.add_argument("--source", action="append", default=[], metavar="NAME=PATH", help="Override a named source; repeatable")
+    p.add_argument("--no-balance", action="store_true", help="Disable configured exposure correction; geometry still resamples")
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parser().parse_args(argv)
+    try:
+        if args.batch is not None:
+            if args.mode is not None or args.direction is not None or args.input is not None or args.source:
+                raise ProcessingError("Batch mode uses each recipe's grouping/direction/sources; do not pass per-job overrides.")
+            report = run_batch(args.batch, args.out, no_balance=args.no_balance)
+            print(json.dumps(report, indent=2))
+            return 0 if report["jobs_rejected"] == 0 else 2
+        overrides = {}
+        for spec in args.source:
+            if "=" not in spec:
+                raise ProcessingError("--source must use NAME=PATH.")
+            name, path = spec.split("=", 1)
+            if not name or not path or name in overrides:
+                raise ProcessingError("--source names must be nonempty and unique, and paths nonempty.")
+            overrides[name] = Path(path)
+        report = run_job(args.config, args.out, mode=args.mode, input_path=args.input,
+                         source_overrides=overrides, no_balance=args.no_balance, direction=args.direction)
+    except (ProcessingError, OSError, ValueError, TypeError) as exc:
+        print(json.dumps({"status": "rejected", "reason": str(exc), "output": str(args.out)}), file=sys.stderr)
+        return 2
+    print(json.dumps({"status": report["status"], "mode": report["mode"],
+                      "containers": report["physical_container_count"], "direction": report["direction"],
+                      "result": str(args.out / "result.png"),
+                      "report": str(args.out / "report.json")}, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

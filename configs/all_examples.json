@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "jobs": [
+    {
+      "key": "single_grey",
+      "config": "single_grey.json"
+    },
+    {
+      "key": "combo_1",
+      "config": "combo_1.json"
+    },
+    {
+      "key": "combo_2",
+      "config": "combo_2.json"
+    },
+    {
+      "key": "vertical_blue_single",
+      "config": "vertical_blue_single.json"
+    },
+    {
+      "key": "vertical_blue_combo",
+      "config": "vertical_blue_combo.json"
+    },
+    {
+      "key": "vertical_red_single",
+      "config": "vertical_red_single.json"
+    }
+  ]
+}

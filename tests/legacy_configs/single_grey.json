@@ -1,0 +1,91 @@
+{
+  "expected_size_wh": [
+    2048,
+    486
+  ],
+  "split_x": 1024,
+  "height": 256,
+  "left_quad": [
+    [
+      656,
+      33
+    ],
+    [
+      1023,
+      44
+    ],
+    [
+      1023,
+      283
+    ],
+    [
+      656,
+      286
+    ]
+  ],
+  "right_quad": [
+    [
+      0,
+      27
+    ],
+    [
+      313,
+      24
+    ],
+    [
+      313,
+      278
+    ],
+    [
+      0,
+      274
+    ]
+  ],
+  "left_feature_quad": [
+    [
+      668,
+      52
+    ],
+    [
+      1023,
+      52
+    ],
+    [
+      1023,
+      264
+    ],
+    [
+      668,
+      264
+    ]
+  ],
+  "right_feature_quad": [
+    [
+      0,
+      43
+    ],
+    [
+      298,
+      39
+    ],
+    [
+      298,
+      250
+    ],
+    [
+      0,
+      250
+    ]
+  ],
+  "exposure": {
+    "sample_width": 64,
+    "exclude_seam_px": 6,
+    "sample_y_fraction": [
+      0.12,
+      0.87
+    ],
+    "fade_px": 160,
+    "max_gain": 1.6
+  },
+  "notes": "Manually selected long side-panel corners, TL/TR/BR/BL, in each half's own coordinates. Existing order retained; no measured overlap, no removed duplicate corrugations. Slim end faces, lifting gear, and yard are excluded. These corners are specific to this frame, not a calibrated reusable camera model."
+}

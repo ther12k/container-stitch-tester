@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "mode": "combo",
+  "height": 320,
+  "gap_px": 12,
+  "sources": {
+    "main": {
+      "path": "../sources/combo_2.png",
+      "expected_size_wh": [
+        2048,
+        448
+      ],
+      "sha256": "a32a4b5140305adfd0cfe1b02254674d0df5743ba51a32bec71a7fe1409a98ed"
+    }
+  },
+  "containers": [
+    {
+      "key": "container_1",
+      "container_id": "SKLU 055189 6",
+      "label": "SKLU 055189 6",
+      "method": "rectify",
+      "regions": [
+        {
+          "source": "main",
+          "view_box": [
+            0,
+            0,
+            1024,
+            448
+          ],
+          "quad": [
+            [
+              329,
+              22
+            ],
+            [
+              1023,
+              27
+            ],
+            [
+              1023,
+              338
+            ],
+            [
+              323,
+              330
+            ]
+          ],
+          "notes": "Right edge is cut by the montage split. Only the supplied visible side region is retained."
+        }
+      ]
+    },
+    {
+      "key": "container_2",
+      "container_id": "SKLU 240755 3",
+      "label": "SKLU 240755 3",
+      "method": "rectify",
+      "regions": [
+        {
+          "source": "main",
+          "view_box": [
+            1024,
+            0,
+            2048,
+            448
+          ],
+          "quad": [
+            [
+              0,
+              12
+            ],
+            [
+              617,
+              21
+            ],
+            [
+              620,
+              324
+            ],
+            [
+              0,
+              320
+            ]
+          ],
+          "notes": "Left part, including some lettering, is clipped in the original. It stays clipped in this output."
+        }
+      ]
+    }
+  ],
+  "notes": "One output containing two distinct containers. Identity strings are manual labels, not OCR. Layout follows the source order; it is not a single continuous scene."
+}

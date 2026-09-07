@@ -1,0 +1,128 @@
+{
+  "schema_version": 1,
+  "mode": "single",
+  "height": 256,
+  "gap_px": 12,
+  "sources": {
+    "main": {
+      "path": "../sources/single_grey.png",
+      "expected_size_wh": [
+        2048,
+        486
+      ],
+      "sha256": "9d719b3ea509c48e5e35f77d93de0755c4855db41e39cf617b0d29ba7ceea5f2"
+    }
+  },
+  "containers": [
+    {
+      "key": "grey",
+      "label": "Grey container side",
+      "method": "edge",
+      "same_surface_confirmed": true,
+      "regions": [
+        {
+          "source": "main",
+          "view_box": [
+            0,
+            0,
+            1024,
+            486
+          ],
+          "quad": [
+            [
+              656,
+              33
+            ],
+            [
+              1023,
+              44
+            ],
+            [
+              1023,
+              283
+            ],
+            [
+              656,
+              286
+            ]
+          ],
+          "feature_quad": [
+            [
+              668,
+              52
+            ],
+            [
+              1023,
+              52
+            ],
+            [
+              1023,
+              264
+            ],
+            [
+              668,
+              264
+            ]
+          ]
+        },
+        {
+          "source": "main",
+          "view_box": [
+            1024,
+            0,
+            2048,
+            486
+          ],
+          "quad": [
+            [
+              0,
+              27
+            ],
+            [
+              313,
+              24
+            ],
+            [
+              313,
+              278
+            ],
+            [
+              0,
+              274
+            ]
+          ],
+          "feature_quad": [
+            [
+              0,
+              43
+            ],
+            [
+              298,
+              39
+            ],
+            [
+              298,
+              250
+            ],
+            [
+              0,
+              250
+            ]
+          ]
+        }
+      ],
+      "exposure": {
+        "enabled": true,
+        "sample_width": 64,
+        "exclude_seam_px": 6,
+        "sample_y_fraction": [
+          0.12,
+          0.87
+        ],
+        "fade_px": 160,
+        "max_gain": 1.6
+      }
+    }
+  ],
+  "notes": "Manual selections for this supplied frame only. Edge alignment is not verified overlap; keep all supplied corrugations, no overlap removal."
+}

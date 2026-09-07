@@ -1,0 +1,189 @@
+{% set is_err = not ok %}
+
+<div id="result-panel" data-mode="{{ panel.mode }}" data-direction="{{ panel.direction }}">
+
+  {% if is_err %}
+
+    <!-- ── Error state ── -->
+    <div class="banner-err" role="alert">
+      <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+      <div>
+        <p class="font-semibold text-xs">{{ title }}</p>
+        <p class="text-[11px] mt-0.5">{{ message }}</p>
+      </div>
+    </div>
+
+    {% if job_id %}
+      <p class="text-[10px] text-mute mt-2">
+        Job: <code class="font-mono bg-soft px-1 py-0.5 rounded">{{ job_id }}</code>
+        · <a href="/jobs/{{ job_id }}/report.json" target="_blank" class="text-blue-600 hover:underline">report.json</a>
+      </p>
+    {% endif %}
+    <details class="mt-2">
+      <summary class="text-[10px] text-mute cursor-pointer hover:text-ink">Show JSON report</summary>
+      <div class="codeblock font-mono text-[10px] leading-relaxed overflow-auto max-h-40 mt-1.5 select-text">{{ report | tojson(indent=2) }}</div>
+    </details>
+
+  {% elif panel.kind == 'batch' %}
+
+    <!-- ── Batch summary ── -->
+    <div class="banner-ok" role="status">
+      <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+      <div>
+        <p class="font-semibold text-xs">{{ title }}</p>
+        <p class="text-[11px] mt-0.5">{{ message }} Finished in {{ '%.1f' % (panel.runtime_ms / 1000) }}s.</p>
+      </div>
+    </div>
+
+    <div class="mt-2.5 overflow-x-auto">
+      <table class="w-full text-[11px]">
+        <thead>
+          <tr class="text-left text-[9px] uppercase tracking-wide text-mute border-b border-line">
+            <th class="py-1.5 pr-3 font-medium">Job</th>
+            <th class="py-1.5 pr-3 font-medium">Status</th>
+            <th class="py-1.5 pr-3 font-medium">Mode / Direction</th>
+            <th class="py-1.5 pr-3 font-medium">Output size</th>
+            <th class="py-1.5 font-medium">Report</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in panel.batch_rows or [] %}
+            <tr class="border-b border-line/60">
+              <td class="py-1.5 pr-3 font-medium">{{ row.key }}</td>
+              <td class="py-1.5 pr-3">
+                <span class="badge {{ 'badge-ok' if row.status != 'rejected' else 'badge-err' }}">{{ row.status }}</span>
+              </td>
+              <td class="py-1.5 pr-3 text-mute">{{ (row.mode or '—') }} / {{ (row.direction or '—') }}</td>
+              <td class="py-1.5 pr-3 text-mute">{{ (row.size_wh | join(' × ')) if row.size_wh else '—' }}</td>
+              <td class="py-1.5"><a href="/jobs/{{ job_id }}/{{ row.report_file }}" target="_blank" class="text-blue-600 hover:underline">json</a></td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="text-[10px] text-mute mt-2">Job: <code class="font-mono bg-soft px-1 py-0.5 rounded">{{ job_id }}</code></p>
+
+  {% else %}
+
+    <!-- ── Success: sources → result comparison ── -->
+    <div class="grid md:grid-cols-[230px_auto_1fr] gap-3 items-stretch">
+
+      <!-- Source images -->
+      <div class="rounded-xl border border-line bg-soft/50 p-2.5">
+        <p class="text-xs font-bold mb-2">Sources <span class="text-mute font-normal">({{ panel.sources | length }})</span></p>
+        <div class="space-y-2">
+          {% for src in panel.sources %}
+            <div class="flex items-center gap-2">
+              <span class="w-5 h-5 rounded-full bg-blue-600/10 text-blue-600 text-[9px] font-bold flex items-center justify-center shrink-0">{{ '%02d' % loop.index }}</span>
+              <a href="{{ src.url }}" target="_blank" class="relative group block grow min-w-0">
+                <img src="{{ src.url }}" alt="{{ src.name }}" loading="lazy"
+                     class="source-thumb w-full h-14 object-cover rounded-md border border-line bg-white">
+                <span class="absolute inset-0 rounded-md bg-black/0 group-hover:bg-black/25 transition-colors flex items-center justify-center">
+                  <svg class="w-4 h-4 text-white opacity-0 group-hover:opacity-100 transition-opacity" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/></svg>
+                </span>
+              </a>
+              <div class="shrink-0 text-right">
+                <p class="text-[10px] font-semibold capitalize">{{ src.name }}</p>
+                <p class="text-[9px] text-mute">{{ src.size_wh | join('×') if src.size_wh else '' }}</p>
+              </div>
+            </div>
+          {% else %}
+            <p class="text-[10px] text-mute">No source records.</p>
+          {% endfor %}
+        </div>
+      </div>
+
+      <!-- Arrow -->
+      <div class="hidden md:flex items-center justify-center">
+        <span class="w-7 h-7 rounded-full bg-blue-600 text-white flex items-center justify-center shadow-lg shadow-blue-600/30">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
+        </span>
+      </div>
+
+      <!-- Stitched result -->
+      <div class="rounded-xl border border-line p-2.5 flex flex-col min-w-0">
+        <div class="flex items-center justify-between mb-2">
+          <p class="text-xs font-bold">Stitched Result</p>
+          {% if panel.status and 'reject' not in panel.status %}
+            {% set q = panel.quality_state %}
+            {% set q_badge = {'rectified_only': 'badge-sky',
+                              'unverified_edge_composite': 'badge-amber',
+                              'overlap_requires_visual_review': 'badge-violet'}.get(q, 'badge-ok') %}
+            <p class="flex items-center gap-1.5 text-[10px]">
+              <span class="badge {{ q_badge }}">{{ panel.quality_label or '✓ Success' }}</span>
+              {% if panel.runtime_ms %}<span class="text-mute">Stitched in {{ '%.1f' % (panel.runtime_ms / 1000) }}s</span>{% endif %}
+            </p>
+          {% endif %}
+        </div>
+
+        {% if panel.result_url %}
+          <button type="button" onclick="openLightbox('{{ panel.result_url }}')"
+                  class="relative group block w-full cursor-zoom-in" title="View fullscreen">
+            <img src="{{ panel.result_url }}" alt="Stitched result"
+                 class="result-img w-full max-h-[32vh] object-contain rounded-md border border-line bg-white">
+            <span class="absolute top-1.5 right-1.5 w-6 h-6 rounded-md bg-black/50 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/></svg>
+            </span>
+          </button>
+        {% endif %}
+
+        <div class="banner-ok mt-2 !py-1.5 !px-2.5">
+          <svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+          <p class="text-[10px]"><b>Processing complete.</b> {{ panel.quality_label or 'Stitched successfully' }}. {{ message }}</p>
+        </div>
+
+        <!-- Metadata chips -->
+        <div class="grid grid-cols-4 gap-1.5 mt-2">
+          <div class="chip"><span class="chip-label">Output size</span><span class="chip-value">{{ panel.output_size_wh | join(' × ') if panel.output_size_wh else '—' }}</span></div>
+          <div class="chip"><span class="chip-label">Mode</span><span class="chip-value">{{ (panel.mode or '—') | capitalize }} · {{ (panel.direction or '—') | capitalize }}</span></div>
+          <div class="chip"><span class="chip-label">Blend</span><span class="chip-value">{{ panel.blend or '—' }}</span></div>
+          <div class="chip"><span class="chip-label">File size</span><span class="chip-value">{{ panel.file_size or '—' }}</span></div>
+        </div>
+
+        <!-- Actions -->
+        <div class="grid grid-cols-3 gap-1.5 mt-2">
+          {% if panel.result_url %}
+            <a href="{{ panel.result_url }}" download="{{ job_id }}_result.png"
+               class="btn-primary justify-center text-[11px] !py-1.5 !px-2">
+              <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+              Download
+            </a>
+            <button type="button" onclick="openLightbox('{{ panel.result_url }}')" class="btn-ghost justify-center text-[11px] !py-1.5 !px-2">
+              <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/></svg>
+              Fullscreen
+            </button>
+          {% else %}
+            <span class="btn-ghost justify-center text-[11px] !py-1.5 opacity-50 pointer-events-none">No result</span>
+          {% endif %}
+          <button type="button" onclick="copyReportJson()" class="btn-ghost justify-center text-[11px] !py-1.5 !px-2">
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+            Copy Report
+          </button>
+        </div>
+
+        <p class="text-[9px] text-mute mt-1.5">
+          <code class="font-mono bg-soft px-1 py-0.5 rounded">{{ job_id }}</code> ·
+          <a href="#" onclick="selectJob('{{ job_id }}');return false;" class="text-blue-600 hover:underline">inspect details</a>
+        </p>
+      </div>
+    </div>
+  {% endif %}
+</div>
+
+{% if skip_sync is not defined or not skip_sync %}
+<script>
+  // Sync segmented controls with this run, then refresh the jobs list.
+  setSeg('seg-mode', {{ (panel.mode or 'none') | tojson }});
+  setSeg('seg-direction', {{ (panel.direction or 'none') | tojson }});
+  document.body.dispatchEvent(new Event('refreshJobs'));
+  window.copyReportJson = function () {
+    navigator.clipboard.writeText({{ report | tojson }});
+  };
+</script>
+{% else %}
+<script>
+  window.copyReportJson = function () {
+    navigator.clipboard.writeText({{ report | tojson }});
+  };
+</script>
+{% endif %}

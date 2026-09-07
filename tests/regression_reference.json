@@ -1,0 +1,29 @@
+{
+  "single_grey": {
+    "source": "Result from the earlier separate scripts in this conversation (before unification).",
+    "shape_hwc": [
+      256,
+      702,
+      4
+    ],
+    "decoded_pixels_sha256": "e6e59a13523b68d931931dece9e0c72347e73be4fc4f1ffbb104be651d42f3ca"
+  },
+  "combo_1": {
+    "source": "Result from the earlier separate scripts in this conversation (before unification).",
+    "shape_hwc": [
+      320,
+      1467,
+      4
+    ],
+    "decoded_pixels_sha256": "9e1bc7bcbcc3ffa1ba7b758faa8f150b9d5e441b74d3365510a5b7a1eff85212"
+  },
+  "combo_2": {
+    "source": "Result from the earlier separate scripts in this conversation (before unification).",
+    "shape_hwc": [
+      320,
+      1378,
+      4
+    ],
+    "decoded_pixels_sha256": "0669f95555bcf98d2e11dd3ff79f8acd280ef3638212605fdc0072ccdfc73548"
+  }
+}

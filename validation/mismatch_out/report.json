@@ -1,0 +1,12 @@
+{
+  "status": "rejected",
+  "program_version": "2.1.0",
+  "reason": "Direction mismatch: selected view boxes are clearly vertically arranged, but the recipe says horizontal. Refusing to create a misleading composite.",
+  "container_key": null,
+  "details": {
+    "configured_direction": "horizontal",
+    "view_box_direction_hint": "vertical"
+  },
+  "result_created": false,
+  "fallback_to_edge": false
+}

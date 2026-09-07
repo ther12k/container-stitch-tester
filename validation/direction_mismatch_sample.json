@@ -1,0 +1,81 @@
+{
+  "schema_version": 2,
+  "mode": "single",
+  "direction": "horizontal",
+  "layout": "horizontal",
+  "cross_size_px": 320,
+  "gap_px": 16,
+  "sources": {
+    "main": {
+      "path": "../sources/vertical_lightblue_stacked.png",
+      "expected_size_wh": [
+        1820,
+        2048
+      ],
+      "sha256": "6dd1a498c0f2eaa8cbf1f817738f91bbdb6f2c109ea732f52e2b525fe818a978"
+    }
+  },
+  "containers": [
+    {
+      "key": "light_blue",
+      "method": "edge",
+      "same_surface_confirmed": true,
+      "regions": [
+        {
+          "source": "main",
+          "view_box": [
+            0,
+            0,
+            1820,
+            1024
+          ],
+          "quad": [
+            [
+              806,
+              430
+            ],
+            [
+              1144,
+              430
+            ],
+            [
+              1104,
+              1023
+            ],
+            [
+              790,
+              1023
+            ]
+          ]
+        },
+        {
+          "source": "main",
+          "view_box": [
+            0,
+            1024,
+            1820,
+            2048
+          ],
+          "quad": [
+            [
+              853,
+              28
+            ],
+            [
+              1119,
+              28
+            ],
+            [
+              1141,
+              494
+            ],
+            [
+              857,
+              494
+            ]
+          ]
+        }
+      ]
+    }
+  ]
+}

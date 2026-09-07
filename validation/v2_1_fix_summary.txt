@@ -1,0 +1,22 @@
+Container Stitch v2.1 fix validation
+====================================
+
+Observed failure:
+- UI showed Single + Horizontal + edge join for a source whose two configured camera views are stacked vertically.
+- That can create an output file while still being conceptually wrong.
+
+Changes:
+1. Added conservative view-box direction guard.
+2. Added direction:auto for obvious same-source stacked/side-by-side view boxes only.
+3. Added processing_state vs quality_state/quality_label to job report.
+4. Web result card no longer equates every created output with a verified success.
+5. Added vertical_lightblue_best_view sample/config.
+6. The corrected sample uses one complete lower view (rectify) instead of forcing a false stitch.
+
+Validation:
+- Existing unit tests: 80/80 PASS.
+- Bad horizontal recipe using top/bottom stacked view boxes: REJECTED with a clear direction-mismatch error.
+- Corrected light-blue sample: created as single + vertical + rectify.
+
+Important:
+- The uploaded sample itself contains a yellow guide overlay; because the workflow is non-generative, that line remains in the rectified output.

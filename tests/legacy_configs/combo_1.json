@@ -1,0 +1,66 @@
+{
+  "expected_size_wh": [
+    2048,
+    569
+  ],
+  "height": 320,
+  "gap": 12,
+  "panels": [
+    {
+      "label": "SKLU 240755 3",
+      "view_box": [
+        0,
+        0,
+        1024,
+        569
+      ],
+      "quad": [
+        [
+          290,
+          49
+        ],
+        [
+          1013,
+          53
+        ],
+        [
+          1013,
+          359
+        ],
+        [
+          291,
+          360
+        ]
+      ],
+      "coverage_note": "Approximate manually selected visible side panel. This is not a calibrated full-container outline."
+    },
+    {
+      "label": "SKLU 055189 6",
+      "view_box": [
+        1024,
+        0,
+        2048,
+        569
+      ],
+      "quad": [
+        [
+          0,
+          67
+        ],
+        [
+          677,
+          37
+        ],
+        [
+          685,
+          352
+        ],
+        [
+          0,
+          368
+        ]
+      ],
+      "coverage_note": "Left boundary is clipped by the montage split. Missing corner/edge is not reconstructed."
+    }
+  ]
+}

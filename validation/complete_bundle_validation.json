@@ -1,0 +1,44 @@
+{
+  "scope": "Packaging and static verification only; no new stitching run or Flask browser test.",
+  "unique_originals": 9,
+  "originals_identical_to_supplied_files": true,
+  "originals_decode_and_verify": true,
+  "existing_result_count": 6,
+  "raw_only_new_originals": 4,
+  "python_files_syntax_checked": 4,
+  "syntax_check": "pass",
+  "batch_recipe_asset_checks": [
+    {
+      "key": "single_grey",
+      "source_paths_exist": true,
+      "declared_hashes_match": true
+    },
+    {
+      "key": "combo_1",
+      "source_paths_exist": true,
+      "declared_hashes_match": true
+    },
+    {
+      "key": "combo_2",
+      "source_paths_exist": true,
+      "declared_hashes_match": true
+    },
+    {
+      "key": "vertical_blue_single",
+      "source_paths_exist": true,
+      "declared_hashes_match": true
+    },
+    {
+      "key": "vertical_blue_combo",
+      "source_paths_exist": true,
+      "declared_hashes_match": true
+    },
+    {
+      "key": "vertical_red_single",
+      "source_paths_exist": true,
+      "declared_hashes_match": true
+    }
+  ],
+  "previous_webapp_runtime_changed": false,
+  "bytecode_caches_excluded": true
+}

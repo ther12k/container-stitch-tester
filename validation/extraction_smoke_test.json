@@ -1,0 +1,61 @@
+{
+  "status": "passed",
+  "command": "python container_stitch.py --batch configs/all_examples.json --out smoke-output",
+  "zip_extracted_to_separate_directory": true,
+  "jobs_created": 6,
+  "jobs_rejected": 0,
+  "comparisons": [
+    {
+      "job": "single_grey",
+      "decoded_pixels_identical": true,
+      "size_wh": [
+        702,
+        256
+      ]
+    },
+    {
+      "job": "combo_1",
+      "decoded_pixels_identical": true,
+      "size_wh": [
+        1467,
+        320
+      ]
+    },
+    {
+      "job": "combo_2",
+      "decoded_pixels_identical": true,
+      "size_wh": [
+        1378,
+        320
+      ]
+    },
+    {
+      "job": "vertical_blue_single",
+      "decoded_pixels_identical": true,
+      "size_wh": [
+        360,
+        756
+      ]
+    },
+    {
+      "job": "vertical_blue_combo",
+      "decoded_pixels_identical": true,
+      "size_wh": [
+        360,
+        1411
+      ]
+    },
+    {
+      "job": "vertical_red_single",
+      "decoded_pixels_identical": true,
+      "size_wh": [
+        364,
+        1298
+      ]
+    }
+  ],
+  "python_version": "3.13.5",
+  "opencv_version": "4.13.0",
+  "numpy_version": "2.3.5",
+  "note": "Same installed dependency environment; no dependency download or new virtual-environment install was performed."
+}

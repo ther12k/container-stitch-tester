@@ -1,0 +1,81 @@
+{% set conf = ai_meta.confidence or {} %}
+
+<div class="auto-wrap">
+  <!-- AI banner -->
+  <div class="auto-banner flex flex-wrap items-center gap-2">
+    <span class="badge badge-violet">🤖 AI-planned</span>
+    <span class="text-[10px] text-mute">
+      Planner <b class="text-ink">{{ ai_meta.planner }}</b>
+      {% if ai_meta.reviewer %} · Reviewer <b class="text-ink">{{ ai_meta.reviewer }}</b>{% endif %}
+      · Attempts <b class="text-ink">{{ ai_meta.attempt_count }}/{{ ai_meta.max_attempts }}</b>
+      {% if conf %} · Confidence: dir {{ '%.2f' % (conf.get('direction', 0)) }} / grouping {{ '%.2f' % (conf.get('container_grouping', 0)) }} / same-surface {{ '%.2f' % (conf.get('same_surface', 0)) }}{% endif %}
+      {% if ai_meta.no_balance %} · exposure balancing off{% endif %}
+    </span>
+  </div>
+  {% if ai_meta.reason %}
+    <p class="text-[10px] text-mute -mt-1 mb-2">AI reason: <i>{{ ai_meta.reason }}</i>
+      {% if ai_meta.exclude %} · Excluded: {{ ai_meta.exclude | join('; ') }}{% endif %}
+    </p>
+  {% endif %}
+
+  {% if ok %}
+    <!-- Final accepted attempt, full panel -->
+    {% with job_id=picked_ctx.job_id, panel=picked_ctx.panel, report=picked_ctx.report,
+            ok=true, title=picked_ctx.title, message=picked_ctx.message, skip_sync=true %}
+      {% include '_result.html' %}
+    {% endwith %}
+  {% else %}
+    <!-- All attempts rejected -->
+    <div class="banner-err" role="alert">
+      <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+      <div>
+        <p class="font-semibold text-xs">AI could not produce a config the validator accepted ({{ ai_meta.attempt_count }}/{{ ai_meta.max_attempts }} attempts).</p>
+        <p class="text-[11px] mt-0.5">The deterministic engine rejected every proposal — no misleading composite was produced. Adjust the plan manually in the Custom Config tab, or retry.</p>
+      </div>
+    </div>
+
+    <div class="mt-3 space-y-1.5">
+      {% for a in ai_meta.attempts %}
+        <div class="rounded-lg border {{ 'border-line' if a.ok else 'border-red-200' }} bg-soft/50 px-3 py-2 text-[10px]">
+          <b>Attempt {{ a.attempt }} — {{ a.provider }}</b>
+          <span class="badge {{ 'badge-ok' if a.ok else ('badge-amber' if a.stage == 'fallback' else 'badge-err') }} ml-1">{{ a.stage }}</span>
+          {% if a.detail %}<p class="text-mute mt-0.5">{{ a.detail }}</p>{% endif %}
+        </div>
+      {% else %}
+        <p class="text-[10px] text-mute">No attempts completed — check the AI settings and endpoint.</p>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  <!-- Attempts log (both success and failure) -->
+  {% if ai_meta.attempts %}
+    <details class="mt-2">
+      <summary class="text-[10px] text-mute cursor-pointer hover:text-ink">Attempt log ({{ ai_meta.attempts | length }})</summary>
+      <div class="mt-1.5 space-y-1">
+        {% for a in ai_meta.attempts %}
+          <div class="rounded-lg border border-line bg-soft/50 px-2.5 py-1.5 text-[10px]">
+            <b>#{{ a.attempt }} {{ a.provider }}</b>
+            <span class="badge {{ 'badge-ok' if a.ok else ('badge-amber' if a.stage == 'fallback' else 'badge-err') }} ml-1">{{ a.stage }}</span>
+            {% if a.detail %}<p class="text-mute mt-0.5">{{ a.detail }}</p>{% endif %}
+          </div>
+        {% endfor %}
+      </div>
+    </details>
+  {% endif %}
+
+  <!-- The plan, for transparency -->
+  {% if ai_meta.plan %}
+    <details class="mt-2">
+      <summary class="text-[10px] text-mute cursor-pointer hover:text-ink">Show the AI plan JSON</summary>
+      <div class="codeblock font-mono text-[10px] leading-relaxed overflow-auto max-h-48 mt-1.5 select-text">{{ ai_meta.plan | tojson(indent=2) }}</div>
+    </details>
+  {% endif %}
+</div>
+
+<script>
+  {% if ok %}
+    setSeg('seg-mode', {{ (picked_ctx.panel.mode or 'none') | tojson }});
+    setSeg('seg-direction', {{ (picked_ctx.panel.direction or 'none') | tojson }});
+  {% endif %}
+  document.body.dispatchEvent(new Event('refreshJobs'));
+</script>

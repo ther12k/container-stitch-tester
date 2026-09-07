@@ -1,0 +1,8 @@
+{
+  "status": "created_requires_review",
+  "mode": "single",
+  "containers": 1,
+  "direction": "vertical",
+  "result": "/mnt/data/container_stitch_v2_1_fix/examples/vertical_lightblue_best_view/result.png",
+  "report": "/mnt/data/container_stitch_v2_1_fix/examples/vertical_lightblue_best_view/report.json"
+}

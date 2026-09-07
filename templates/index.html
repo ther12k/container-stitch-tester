@@ -1,0 +1,985 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Container Stitch Tester</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: { DEFAULT: '#2563eb', dark: '#1d4ed8' },
+            navy: '#0d1b2e',
+            page: 'var(--page)',
+            card: 'var(--card)',
+            ink: 'var(--ink)',
+            mute: 'var(--mute)',
+            line: 'var(--line)',
+            soft: 'var(--soft)',
+          },
+          fontFamily: {
+            sans: ['Inter', 'ui-sans-serif', 'system-ui', '-apple-system', 'sans-serif'],
+            mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
+          },
+        },
+      },
+    }
+  </script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+
+<body class="min-h-screen flex flex-col bg-page text-ink font-sans" id="page-body">
+
+  <!-- ═══ Toast ═══ -->
+  <div id="paste-toast"
+       class="hidden fixed top-14 right-4 z-[70] px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg shadow-xl">
+    📋 Image pasted — staged below, ready to stitch
+  </div>
+
+  <!-- ════════════════ DARK SHELL: single compact header band ════════════════ -->
+  <div class="bg-navy text-white" id="top">
+
+    <nav class="max-w-screen-2xl mx-auto px-5 h-14 flex items-center gap-4">
+      <!-- Logo + tagline -->
+      <div class="flex items-center gap-2.5 min-w-0">
+        <div class="w-8 h-8 rounded-lg bg-blue-600/20 border border-blue-500/40 flex items-center justify-center shrink-0">
+          <svg class="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round"
+                  d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>
+          </svg>
+        </div>
+        <div class="min-w-0 leading-tight">
+          <div class="flex items-center gap-2">
+            <h1 class="font-bold text-sm truncate">Container Stitch Tester</h1>
+            <span class="text-[9px] font-semibold px-1 py-0.5 rounded bg-blue-600/25 text-blue-300 border border-blue-500/40 shrink-0">v{{ version }}</span>
+          </div>
+          <p class="text-[10px] text-slate-400 truncate">
+            Stitch. Compare. <span class="text-blue-400 font-semibold">Validate.</span>
+            <span class="text-slate-500 hidden 2xl:inline"> — same Python/OpenCV workflow, runs locally</span>
+          </p>
+        </div>
+      </div>
+
+      <!-- Nav -->
+      <div class="hidden lg:flex items-center gap-1 mx-auto text-xs">
+        <a href="#top" class="nav-link nav-link-active px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+          Home
+        </a>
+        <a href="#config-card" class="nav-link px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 text-slate-400 hover:text-white transition-colors">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+          Examples
+        </a>
+        <button onclick="openDocs('readme')" class="px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 text-slate-400 hover:text-white transition-colors">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+          Documentation
+        </button>
+        <button onclick="openDocs('engine')" class="px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 text-slate-400 hover:text-white transition-colors">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+          API
+        </button>
+      </div>
+
+      <!-- Stat pills -->
+      <div class="hidden xl:flex items-center gap-1.5 mx-auto lg:mx-0">
+        <span class="stat-pill"><svg class="w-3.5 h-3.5 text-blue-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg><b>{{ n_examples }}</b><span>examples</span></span>
+        <span class="stat-pill"><svg class="w-3.5 h-3.5 text-violet-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg><b>{{ n_sources }}</b><span>samples</span></span>
+        <span class="stat-pill"><svg class="w-3.5 h-3.5 text-amber-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg><b>{{ avg_runtime }}</b><span>avg</span></span>
+        <span class="stat-pill"><svg class="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg><b>100%</b><span>local</span></span>
+      </div>
+
+      <!-- Controls -->
+      <div class="flex items-center gap-2 ml-auto xl:ml-0">
+        <button id="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark theme"
+                class="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/10 transition-colors">
+          <svg id="icon-moon" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/></svg>
+          <svg id="icon-sun" class="w-4 h-4 hidden" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+        </button>
+        <button onclick="runExampleShortcut()"
+                class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition-colors">
+          <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path d="M6.3 2.84A1.5 1.5 0 004 4.11v12.78a1.5 1.5 0 002.3 1.27l9.34-6.39a1.5 1.5 0 000-2.54L6.3 2.84z"/></svg>
+          Run Test
+          <span class="kbd">⌘K</span>
+        </button>
+      </div>
+    </nav>
+  </div><!-- /dark shell -->
+
+  <!-- ════════════════ LIGHT CONTENT ════════════════ -->
+  <main class="flex-1 w-full max-w-screen-2xl mx-auto px-5 py-3 space-y-4 flex flex-col">
+
+    <div class="grid xl:grid-cols-[340px_1fr] gap-4 items-stretch flex-1 min-h-0">
+
+      <!-- ─── Left: Test Configuration ─── -->
+      <section class="card p-4 h-full flex flex-col" id="config-card">
+        <div class="flex items-center gap-2">
+          <div class="icon-tile icon-tile-sm bg-blue-50 text-blue-600 shrink-0">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+          </div>
+          <div>
+            <h3 class="font-bold text-sm leading-tight">Test Configuration</h3>
+            <p class="text-[10px] text-mute">Choose an example or provide your own.</p>
+          </div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="flex gap-5 mt-3 border-b border-line text-xs font-medium">
+          <button id="tab-packaged" onclick="switchConfigTab('packaged')" class="tab-btn tab-on pb-2">Packaged Examples</button>
+          <button id="tab-json" onclick="switchConfigTab('json')" class="tab-btn pb-2">Custom Config</button>
+        </div>
+
+        <!-- Staged images strip (paste / file feedback) -->
+        <div id="staged-strip" class="hidden mt-3 rounded-xl border border-blue-200 bg-blue-50/60 p-2">
+          <div class="flex items-center justify-between mb-1.5">
+            <p class="text-[10px] font-bold uppercase tracking-wide text-blue-700">
+              Staged images <span id="staged-count" class="font-normal normal-case"></span>
+              <span id="orient-badge" class="badge badge-sky hidden ml-1 normal-case"></span>
+            </p>
+            <button type="button" onclick="clearStaged()" class="text-[10px] font-medium text-blue-600 hover:underline">Clear</button>
+          </div>
+          <div id="staged-thumbs" class="flex gap-2 overflow-x-auto"></div>
+          <p class="text-[9px] text-blue-500/80 mt-1.5">Named <code class="font-mono">input.png</code> to match the default config. Dimensions and orientation are detected automatically — portrait images are stitched vertically.</p>
+        </div>
+
+        <!-- ══ Tab 1: Packaged examples ══ -->
+        <div id="panel-packaged" class="pt-3 space-y-3">
+          <div>
+            <label class="text-xs font-medium flex items-center gap-1">
+              <span class="text-mute">1.</span> Example recipe
+              <span class="hint-dot" title="Pick one of the six reviewed recipes, or the full batch.">i</span>
+            </label>
+            <select id="recipe-select" name="recipe" onchange="syncExampleCards(this.value)"
+                    class="input-field input-sm mt-1">
+              {% for item in examples %}
+                <option value="{{ item.key }}">{{ item.label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="grid grid-cols-3 gap-2" id="example-cards">
+            {% for card in example_cards %}
+              <button type="button" class="ex-card{% if loop.first %} ex-on{% endif %}"
+                      data-key="{{ card.key }}" onclick="pickExampleCard('{{ card.key }}')">
+                <span class="ex-check">✓</span>
+                <img src="{{ card.thumb_url }}" alt="{{ card.short }}" loading="lazy"
+                     class="h-8 w-full object-cover rounded-md bg-slate-100">
+                <span class="block text-[10px] font-semibold mt-1 leading-tight">{{ card.short }}</span>
+                <span class="block text-[9px] text-mute">{{ card.direction }}</span>
+              </button>
+            {% endfor %}
+          </div>
+
+          <form id="example-form" hx-post="/run-example" hx-target="#result" hx-indicator="#spinner"
+                hx-disabled-elt="find button[type='submit']" class="space-y-2.5">
+            <input type="hidden" name="recipe" id="recipe-hidden" value="single_grey">
+            <label class="check-row text-xs">
+              <input type="checkbox" name="no_balance" class="checkbox">
+              Disable exposure balancing
+              <span class="hint-dot" title="Skip the configured seam exposure correction.">i</span>
+            </label>
+            <button type="submit" class="btn-primary w-full !py-2 text-xs justify-center">
+              <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path d="M6.3 2.84A1.5 1.5 0 004 4.11v12.78a1.5 1.5 0 002.3 1.27l9.34-6.39a1.5 1.5 0 000-2.54L6.3 2.84z"/></svg>
+              Run Example
+              <span class="kbd">⌘↵</span>
+            </button>
+          </form>
+
+          <div class="flex items-center gap-2 text-[10px] font-semibold text-mute">
+            <span class="h-px bg-line flex-1"></span> your own images? use the Custom Config tab <span class="h-px bg-line flex-1"></span>
+          </div>
+        </div><!-- /panel-packaged -->
+
+        <!-- ══ Tab 2: Custom config (JSON editor — no upload needed) ══ -->
+        <div id="panel-json" class="hidden pt-3 space-y-2.5">
+          <div class="flex items-center justify-between">
+            <p class="text-xs font-medium">Config JSON <span class="text-mute font-normal">— pre-filled, edit freely</span></p>
+            <div class="flex gap-2">
+              <button type="button" id="btn-use-file" onclick="toggleConfigInput()" class="text-[10px] text-blue-600 hover:underline">Upload file instead</button>
+              <button type="button" onclick="resetDefaultConfig()" class="text-[10px] text-mute hover:underline">Reset</button>
+            </div>
+          </div>
+
+          <form hx-post="/run-custom" hx-target="#result" hx-indicator="#spinner"
+                enctype="multipart/form-data" hx-disabled-elt="find button[type='submit']"
+                class="space-y-2.5">
+            <div id="config-textarea-wrap">
+              <textarea name="config_text" id="config-textarea" rows="8" spellcheck="false"
+                        class="codeblock w-full resize-y font-mono text-[10px] leading-relaxed">{{ default_config }}</textarea>
+            </div>
+            <div id="config-file-wrap" class="hidden">
+              <div class="dropzone !py-2">
+                <input type="file" name="config" id="config-file-upload" accept=".json,application/json">
+                <span id="config-upload-label" class="text-xs font-semibold">Upload Config JSON</span>
+                <span class="text-[9px] text-mute">JSON file with paths and settings</span>
+              </div>
+            </div>
+
+            <div class="dropzone !py-2">
+              <input type="file" name="sources" id="sources-editor" multiple accept="image/*">
+              <span id="sources-editor-label" class="text-xs font-semibold">Choose Image Files</span>
+              <span class="text-[9px] text-mute">Select, drop, or paste (Ctrl+V / ⌘V) anywhere</span>
+            </div>
+
+            <!-- AI planning toggle -->
+            <div class="flex items-center justify-between rounded-xl border border-violet-200 bg-violet-50/50 px-3 py-2">
+              <label class="check-row text-xs font-semibold text-violet-900">
+                <input type="checkbox" id="ai-toggle" class="checkbox" onchange="aiToggled()">
+                🤖 AI planning
+              </label>
+              <div class="flex items-center gap-2 min-w-0">
+                <span id="ai-summary" class="text-[10px] text-violet-700/80 truncate hidden"></span>
+                <button type="button" onclick="openAiModal()" class="text-[10px] font-medium text-violet-700 hover:underline shrink-0">⚙ settings</button>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-2">
+              <label class="text-[10px] text-mute font-medium">Mode
+                <select name="mode" class="input-field input-sm mt-0.5">
+                  <option value="auto" selected>auto — try both</option>
+                  <option value="">(none — use config)</option>
+                  <option value="single">single</option>
+                  <option value="combo">combo</option>
+                </select>
+              </label>
+              <label class="text-[10px] text-mute font-medium">Direction
+                <select name="direction" class="input-field input-sm mt-0.5">
+                  <option value="">(none)</option>
+                  <option value="horizontal">horizontal</option>
+                  <option value="vertical">vertical</option>
+                </select>
+              </label>
+            </div>
+
+            <div class="flex flex-wrap gap-x-3 gap-y-1">
+              <label class="check-row text-[11px]">
+                <input type="checkbox" name="no_balance" class="checkbox"> No exposure balancing
+              </label>
+              <label class="check-row text-[11px]">
+                <input type="checkbox" name="run_as_batch" class="checkbox"> As batch manifest
+              </label>
+            </div>
+
+            <button type="submit" class="btn-primary w-full !py-2 text-xs justify-center">
+              <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path d="M6.3 2.84A1.5 1.5 0 004 4.11v12.78a1.5 1.5 0 002.3 1.27l9.34-6.39a1.5 1.5 0 000-2.54L6.3 2.84z"/></svg>
+              Run Custom Job
+            </button>
+          </form>
+        </div><!-- /panel-json -->
+      </section>
+
+      <!-- ─── Right column: results + bottom cards ─── -->
+      <div class="space-y-4 min-w-0 flex flex-col">
+
+        <!-- Results & Comparison -->
+        <section class="card p-4 flex-1 flex flex-col min-h-0">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div class="flex items-center gap-2">
+              <div class="icon-tile icon-tile-sm bg-blue-50 text-blue-600 shrink-0">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+              </div>
+              <div>
+                <h3 class="font-bold text-sm leading-tight">Results &amp; Comparison</h3>
+                <p class="text-[10px] text-mute">Inputs vs stitched result.</p>
+              </div>
+            </div>
+            <div class="flex items-center gap-2 flex-wrap">
+              <div class="seg" id="seg-mode" data-value="single">
+                <button class="seg-btn seg-on" data-v="single" onclick="segPick(this)">Single</button>
+                <button class="seg-btn" data-v="combo" onclick="segPick(this)">Combo</button>
+              </div>
+              <div class="seg" id="seg-direction" data-value="horizontal">
+                <button class="seg-btn seg-on" data-v="horizontal" onclick="segPick(this)">Horizontal</button>
+                <button class="seg-btn" data-v="vertical" onclick="segPick(this)">Vertical</button>
+              </div>
+              <div id="spinner" class="htmx-indicator items-center gap-1.5 text-blue-600 text-xs font-medium">
+                <svg class="animate-spin w-3.5 h-3.5" viewBox="0 0 24 24" fill="none">
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+                </svg>
+                Processing…
+              </div>
+            </div>
+          </div>
+
+          <div id="result" class="mt-3 flex-1 flex flex-col justify-center">
+            <div class="empty-state !py-5">
+              <svg class="w-8 h-8 text-mute/50 mx-auto" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+              <p class="text-xs text-mute mt-2">Run an example to compare source images and the stitched result.</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- Bottom row: jobs / details / json / console -->
+        <div class="grid md:grid-cols-2 xl:grid-cols-4 gap-4 items-start">
+
+          <!-- Recent Jobs -->
+          <section class="card p-4">
+            <div class="flex items-center justify-between">
+              <h3 class="font-bold text-sm leading-tight">Recent Jobs</h3>
+              <button hx-get="/jobs" hx-target="#jobs" class="text-[10px] font-medium text-blue-600 hover:underline">View All</button>
+            </div>
+            <div id="jobs" class="mt-2.5 space-y-1.5 max-h-52 overflow-y-auto pr-0.5" hx-get="/jobs" hx-trigger="refreshJobs from:body">
+              {% include '_jobs.html' %}
+            </div>
+          </section>
+
+          <!-- Job Details -->
+          <section class="card p-4">
+            <h3 class="font-bold text-sm leading-tight">Job Details</h3>
+            <div id="job-details" class="mt-2.5 max-h-52 overflow-y-auto pr-0.5">
+              <p class="text-xs text-mute">Select a job to inspect its metadata.</p>
+            </div>
+          </section>
+
+          <!-- JSON Output -->
+          <section class="card p-4">
+            <div class="flex items-center justify-between">
+              <h3 class="font-bold text-sm leading-tight">JSON Output</h3>
+              <button onclick="copyJson()" class="text-[10px] font-medium text-blue-600 hover:underline">Copy</button>
+            </div>
+            <div class="flex gap-4 mt-2 border-b border-line text-[11px] font-medium">
+              <button class="tab-btn tab-on pb-1.5" id="jtab-config" onclick="switchJsonTab('config')">Config</button>
+              <button class="tab-btn pb-1.5" id="jtab-report" onclick="switchJsonTab('report')">Metadata</button>
+              <button class="tab-btn pb-1.5" id="jtab-batch" onclick="switchJsonTab('batch')">Batch</button>
+            </div>
+            <div id="json-view" class="codeblock font-mono text-[10px] leading-relaxed overflow-auto max-h-44 mt-2 select-text">Select a job to view its JSON.</div>
+          </section>
+
+          <!-- Console -->
+          <section class="card p-4">
+            <div class="flex items-center justify-between">
+              <h3 class="font-bold text-sm leading-tight">Console</h3>
+              <button onclick="clearConsole()" class="text-[10px] font-medium text-blue-600 hover:underline">Clear</button>
+            </div>
+            <div id="console"
+                 class="mt-2.5 max-h-52 overflow-y-auto font-mono text-[9.5px] leading-relaxed space-y-0.5 pr-0.5"
+                 data-clean="0">
+              <p class="text-mute">System events appear here while jobs run — staging, AI calls, engine verdicts, retries.</p>
+            </div>
+          </section>
+        </div>
+      </div><!-- /right column -->
+    </div>
+  </main>
+
+  <!-- ════════════════ Footer ════════════════ -->
+  <footer class="bg-navy text-slate-400 mt-2">
+    <div class="max-w-screen-2xl mx-auto px-5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+      <p>Container Stitch Tester v{{ version }} <span class="text-slate-600 mx-1">|</span> Built with Python &amp; OpenCV <span class="text-slate-600 mx-1">|</span> Non-generative. Runs locally.</p>
+      <div class="flex items-center gap-4">
+        <button onclick="openDocs('readme')" class="hover:text-white transition-colors">Documentation</button>
+        <button onclick="openDocs('configuration')" class="hover:text-white transition-colors">Configuration</button>
+        <button onclick="openDocs('samples')" class="hover:text-white transition-colors">Samples</button>
+      </div>
+    </div>
+  </footer>
+
+  <!-- ════════════════ Docs modal ════════════════ -->
+  <div id="doc-modal" class="hidden fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" onclick="if(event.target===this)closeDocs()">
+    <div class="bg-card text-ink rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col overflow-hidden" role="dialog" aria-modal="true">
+      <div class="flex items-center justify-between px-5 py-3.5 border-b border-line">
+        <h4 id="doc-title" class="font-bold">Documentation</h4>
+        <button onclick="closeDocs()" class="w-8 h-8 rounded-lg hover:bg-soft flex items-center justify-center text-mute hover:text-ink transition-colors">✕</button>
+      </div>
+      <pre id="doc-body" class="flex-1 overflow-auto p-5 text-xs font-mono whitespace-pre-wrap leading-relaxed select-text"></pre>
+    </div>
+  </div>
+
+  <!-- ════════════════ AI settings modal ════════════════ -->
+  <div id="ai-modal" class="hidden fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" onclick="if(event.target===this)closeAiModal()">
+    <div class="bg-card text-ink rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden" role="dialog" aria-modal="true">
+      <div class="flex items-center justify-between px-5 py-3.5 border-b border-line">
+        <h4 class="font-bold">🤖 AI planning settings</h4>
+        <button onclick="closeAiModal()" class="w-8 h-8 rounded-lg hover:bg-soft flex items-center justify-center text-mute hover:text-ink transition-colors">✕</button>
+      </div>
+      <div class="flex-1 overflow-auto p-5 space-y-4 text-sm">
+        <div>
+          <p class="font-semibold text-xs mb-2">Planner <span class="text-mute font-normal">— first-pass vision model (required)</span></p>
+          <div class="space-y-2">
+            <input id="ai-p-base" placeholder="Base URL — e.g. https://open.bigmodel.cn/api/paas/v4" class="input-field input-sm w-full font-mono text-[11px]">
+            <input id="ai-p-key" type="password" placeholder="API key" class="input-field input-sm w-full font-mono text-[11px]">
+            <input id="ai-p-model" placeholder="Model — must accept image input (e.g. auto/vision; glm/* text-only on this proxy)" class="input-field input-sm w-full font-mono text-[11px]">
+          </div>
+        </div>
+        <div>
+          <p class="font-semibold text-xs mb-2">Reviewer <span class="text-mute font-normal">— optional second opinion; if unreachable, the planner takes over automatically</span></p>
+          <div class="space-y-2">
+            <input id="ai-r-base" placeholder="Base URL" class="input-field input-sm w-full font-mono text-[11px]">
+            <input id="ai-r-key" type="password" placeholder="API key" class="input-field input-sm w-full font-mono text-[11px]">
+            <input id="ai-r-model" placeholder="Model — e.g. gpt-5.6-luna" class="input-field input-sm w-full font-mono text-[11px]">
+          </div>
+        </div>
+        <div class="flex items-center gap-3">
+          <label class="text-xs text-mute font-medium">Max attempts
+            <select id="ai-max-attempts" class="input-field input-sm mt-0.5 w-24">
+              <option>2</option><option selected>3</option><option>4</option>
+            </select>
+          </label>
+          <p class="text-[10px] text-mute leading-snug">AI proposes — OpenCV proves. The deterministic engine validates every plan and may reject it; rejected plans are sent back with diagnostics up to this many attempts.</p>
+        </div>
+        <p class="text-[10px] text-mute leading-snug border-t border-line pt-3">
+          🔒 Keys stay in your browser (localStorage) and are sent only with each run to this local server,
+          which calls your configured endpoints directly. The AI never edits pixels — it only proposes
+          mode, direction, regions and method; the engine validates everything.
+        </p>
+      </div>
+      <div class="flex items-center justify-end gap-2 px-5 py-3 border-t border-line">
+        <button onclick="closeAiModal()" class="btn-ghost !py-1.5 text-xs">Cancel</button>
+        <button onclick="saveAiSettings(); closeAiModal();" class="btn-primary !py-1.5 text-xs">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════ Lightbox ════════════════ -->
+  <div id="lightbox" class="hidden fixed inset-0 z-[65] bg-black/85 cursor-zoom-out items-center justify-center p-6" onclick="closeLightbox()">
+    <img id="lightbox-img" src="" alt="Fullscreen result" class="max-w-full max-h-full object-contain rounded-lg shadow-2xl">
+  </div>
+
+<script>
+/* ═══════════ Theme ═══════════ */
+function applyTheme(dark) {
+  document.documentElement.classList.toggle('theme-dark', dark);
+  document.getElementById('icon-moon').classList.toggle('hidden', dark);
+  document.getElementById('icon-sun').classList.toggle('hidden', !dark);
+  localStorage.setItem('cst-theme', dark ? 'dark' : 'light');
+}
+function toggleTheme() {
+  applyTheme(!document.documentElement.classList.contains('theme-dark'));
+}
+applyTheme(localStorage.getItem('cst-theme') === 'dark');
+
+/* ═══════════ Config tabs ═══════════ */
+function switchConfigTab(tab) {
+  document.getElementById('panel-packaged').classList.toggle('hidden', tab !== 'packaged');
+  document.getElementById('panel-json').classList.toggle('hidden', tab !== 'json');
+  document.getElementById('tab-packaged').classList.toggle('tab-on', tab === 'packaged');
+  document.getElementById('tab-json').classList.toggle('tab-on', tab === 'json');
+}
+
+/* ═══════════ Example cards ↔ select ═══════════ */
+function pickExampleCard(key) {
+  document.getElementById('recipe-select').value = key;
+  syncExampleCards(key);
+}
+function syncExampleCards(key) {
+  document.getElementById('recipe-hidden').value = key;
+  document.querySelectorAll('.ex-card').forEach(c => c.classList.toggle('ex-on', c.dataset.key === key));
+}
+
+/* ═══════════ Run triggers ═══════════ */
+function runExampleShortcut() {
+  const form = document.getElementById('example-form');
+  if (document.querySelector('#example-form button[type="submit"]').disabled) return;
+  form.requestSubmit ? form.requestSubmit() : form.querySelector('button[type="submit"]').click();
+}
+document.addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); runExampleShortcut(); }
+  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); runExampleShortcut(); }
+  if (e.key === 'Escape') { closeDocs(); closeLightbox(); }
+});
+
+/* ═══════════ Segmented controls ═══════════ */
+function segPick(btn) {
+  btn.parentElement.querySelectorAll('.seg-btn').forEach(b => b.classList.toggle('seg-on', b === btn));
+  btn.parentElement.dataset.value = btn.dataset.v;
+}
+function setSeg(group, value) {
+  const el = document.getElementById(group);
+  if (!el || !value) return;
+  el.dataset.value = value;
+  el.querySelectorAll('.seg-btn').forEach(b => b.classList.toggle('seg-on', b.dataset.v === value));
+}
+
+/* ═══════════ Staged images: paste / pick / drop ═══════════ */
+let staged = [];
+
+function setSourceFiles(files) {
+  const dt = new DataTransfer();
+  [...files].forEach(f => dt.items.add(f));
+  const input = document.getElementById('sources-editor');
+  input.files = dt.files;
+}
+
+function nameFor(file, idx) {
+  return idx === 0 ? 'input.png' : `input_${idx + 1}.png`;
+}
+
+function handleImageFiles(files, { fromPaste = false } = {}) {
+  const imgs = [...files].filter(f => f.type.startsWith('image/'));
+  if (!imgs.length) return;
+  staged = imgs.map((f, i) => new File([f], nameFor(f, i), { type: f.type || 'image/png' }));
+  setSourceFiles(staged);
+  renderStaged();
+  patchExpectedSize(staged[0]);
+  showToast();
+  if (fromPaste) switchConfigTab('json');
+}
+
+function renderStaged() {
+  const strip = document.getElementById('staged-strip');
+  const wrap = document.getElementById('staged-thumbs');
+  wrap.innerHTML = '';
+  if (!staged.length) {
+    strip.classList.add('hidden');
+    document.getElementById('sources-editor-label').textContent = 'Choose Image Files';
+    return;
+  }
+  strip.classList.remove('hidden');
+  document.getElementById('staged-count').textContent = `(${staged.length})`;
+  document.getElementById('sources-editor-label').textContent = `${staged.length} image${staged.length > 1 ? 's' : ''} staged`;
+  staged.forEach((f, i) => {
+    const cell = document.createElement('div');
+    cell.className = 'relative shrink-0';
+    const img = document.createElement('img');
+    img.src = URL.createObjectURL(f);
+    img.className = 'w-16 h-11 object-cover rounded-md border border-blue-300 bg-white';
+    img.alt = f.name;
+    const name = document.createElement('p');
+    name.className = 'text-[8px] text-blue-700 text-center mt-0.5 truncate w-16';
+    name.textContent = `${f.name} · …`;
+    img.onload = () => {
+      name.textContent = `${f.name} · ${img.naturalWidth}×${img.naturalHeight}`;
+    };
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.innerHTML = '✕';
+    del.className = 'absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-slate-700 text-white text-[8px] flex items-center justify-center hover:bg-red-500';
+    del.onclick = () => { staged.splice(i, 1); setSourceFiles(staged); renderStaged(); };
+    cell.append(img, del, name);
+    wrap.appendChild(cell);
+  });
+}
+
+function clearStaged() {
+  staged = [];
+  setSourceFiles([]);
+  renderStaged();
+  clearOrientationUI();
+}
+
+document.addEventListener('paste', e => {
+  const items = [...(e.clipboardData?.items || [])];
+  const item = items.find(it => it.type.startsWith('image/'));
+  if (!item) return;
+  e.preventDefault();
+  const f = item.getAsFile();
+  if (f) handleImageFiles([f], { fromPaste: true });
+});
+
+/* Orientation feedback: show detected direction immediately and lock the
+   incompatible assertion option (v2.1 engine rejects mismatches at run time;
+   this surfaces it before running). */
+function applyOrientationUI(vertical) {
+  const sel = document.querySelector('#panel-json select[name="direction"]');
+  if (sel) {
+    [...sel.options].forEach(o => { o.disabled = o.value === (vertical ? 'horizontal' : 'vertical'); });
+    sel.value = vertical ? 'vertical' : 'horizontal';
+  }
+  const b = document.getElementById('orient-badge');
+  b.textContent = vertical ? '⯋ Vertical detected' : '⯈ Horizontal detected';
+  b.classList.remove('hidden');
+}
+function clearOrientationUI() {
+  const sel = document.querySelector('#panel-json select[name="direction"]');
+  if (sel) {
+    [...sel.options].forEach(o => { o.disabled = false; });
+    sel.value = '';
+  }
+  document.getElementById('orient-badge').classList.add('hidden');
+}
+
+function patchExpectedSize(file) {
+  const ta = document.getElementById('config-textarea');
+  try {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const W = img.naturalWidth, H = img.naturalHeight;
+      applyOrientationUI(H > W);
+      // Untouched default template → also rescale quads/view_boxes to the
+      // actual image so paste → Run Custom Job works for any size.
+      if (ta.value.trim() === DEFAULT_CONFIG.trim()) {
+        ta.value = scaledDefaultConfig(W, H);
+      } else {
+        const cfg = JSON.parse(ta.value);
+        const main = cfg.sources && cfg.sources.main;
+        if (main && (!main.path || main.path === 'input.png')) {
+          main.expected_size_wh = [W, H];
+          ta.value = JSON.stringify(cfg, null, 2);
+        }
+      }
+      URL.revokeObjectURL(url);
+    };
+    img.src = url;
+  } catch (_) { /* leave textarea untouched if not valid JSON */ }
+}
+
+/* Rebuild the default two-half edge-join config for an arbitrary image size.
+   Orientation is detected from the aspect ratio: portrait (H > W) -> vertical
+   schema-2 config (top/bottom halves), landscape -> horizontal (left/right).
+   Quads are view-relative (engine requirement). */
+function scaledDefaultConfig(W, H) {
+  const cfg = JSON.parse(DEFAULT_CONFIG);
+  const vertical = H > W;
+  let halves;
+  if (vertical) {
+    const half = Math.max(8, Math.floor(H / 2));
+    halves = [
+      { box: [0, 0, W, half], len: half },
+      { box: [0, half, W, H], len: H - half },
+    ];
+    cfg.schema_version = 2;
+    delete cfg.height;
+    cfg.direction = 'vertical';
+    cfg.layout = 'vertical';
+    cfg.cross_size_px = 320;
+  } else {
+    const half = Math.max(8, Math.floor(W / 2));
+    halves = [
+      { box: [0, 0, half, H], len: half },
+      { box: [half, 0, W, H], len: W - half },
+    ];
+  }
+  cfg.containers[0].regions.forEach((r, i) => {
+    const { box, len } = halves[i];
+    r.view_box = box;
+    r.quad = vertical
+      ? [[0, 0], [W - 1, 0], [W - 1, len - 1], [0, len - 1]]
+      : [[0, 0], [len - 1, 0], [len - 1, H - 1], [0, H - 1]];
+  });
+  cfg.sources.main.expected_size_wh = [W, H];
+  cfg.notes = `Auto-generated two-half edge join (${vertical ? 'vertical, portrait detected' : 'horizontal'}), scaled to the staged input.png.`;
+  return JSON.stringify(cfg, null, 2);
+}
+
+function showToast() {
+  const t = document.getElementById('paste-toast');
+  t.classList.remove('hidden');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.classList.add('hidden'), 3500);
+}
+
+/* Upload config textarea ↔ file toggle */
+function toggleConfigInput() {
+  const tw = document.getElementById('config-textarea-wrap');
+  const fw = document.getElementById('config-file-wrap');
+  const btn = document.getElementById('btn-use-file');
+  const isText = !tw.classList.contains('hidden');
+  tw.classList.toggle('hidden', isText);
+  fw.classList.toggle('hidden', !isText);
+  btn.textContent = isText ? 'Edit JSON instead' : 'Upload file instead';
+}
+
+document.getElementById('config-file-upload').addEventListener('change', function () {
+  if (this.files.length) document.getElementById('config-upload-label').textContent = this.files[0].name;
+});
+document.getElementById('sources-editor').addEventListener('change', function () {
+  if (this.files.length) handleImageFiles(this.files);
+});
+
+/* ═══════════ Drag highlight ═══════════ */
+document.querySelectorAll('.dropzone').forEach(z => {
+  ['dragenter', 'dragover'].forEach(ev => z.addEventListener(ev, e => { e.preventDefault(); z.classList.add('drop-on'); }));
+  ['dragleave', 'drop'].forEach(ev => z.addEventListener(ev, () => z.classList.remove('drop-on')));
+});
+
+/* ═══════════ Default config reset ═══════════ */
+const DEFAULT_CONFIG = {{ default_config | tojson }};
+function resetDefaultConfig() {
+  document.getElementById('config-textarea').value = DEFAULT_CONFIG;
+}
+
+/* ═══════════ Job selection: details + JSON tabs ═══════════ */
+const jsonState = { config: null, report: null, batch: null, active: 'config' };
+
+async function selectJob(jobId) {
+  document.querySelectorAll('.job-row').forEach(r => r.classList.toggle('job-on', r.dataset.jobId === jobId));
+  const details = document.getElementById('job-details');
+  details.innerHTML = '<p class="text-[11px] text-mute">Loading…</p>';
+  try {
+    const [reportRes, metaRes, configRes] = await Promise.all([
+      fetch(`/api/jobs/${jobId}/report`), fetch(`/api/jobs/${jobId}/meta`), fetch(`/api/jobs/${jobId}/config`),
+    ]);
+    const report = reportRes.ok ? await reportRes.json() : null;
+    const meta = metaRes.ok ? await metaRes.json() : {};
+    const config = configRes.ok ? await configRes.text() : null;
+    if (!report) throw new Error('report unavailable');
+
+    jsonState.report = JSON.stringify(report, null, 2);
+    jsonState.config = config;
+    jsonState.batch = Array.isArray(report.jobs) ? JSON.stringify(report, null, 2) : null;
+    renderJsonTab();
+
+    const runtime = meta.runtime_ms ? `${(meta.runtime_ms / 1000).toFixed(1)} seconds` : '—';
+    const bad = String(report.status).includes('reject');
+    details.innerHTML = `
+      <div class="space-y-1.5 text-[11px]">
+        <div class="flex items-center justify-between">
+          <span class="text-mute">Status</span>
+          <span class="badge ${bad ? 'badge-err' : 'badge-ok'}">${esc(report.status)}</span>
+        </div>
+        <div class="detail-row"><span>Started</span><b>${esc(meta.started_at || '—')}</b></div>
+        <div class="detail-row"><span>Runtime</span><b>${runtime}</b></div>
+        <div class="detail-row"><span>Example</span><b>${esc(meta.label || jobId)}</b></div>
+        <div class="detail-row"><span>Mode / Direction</span><b>${esc(title(report.mode) || '—')} / ${esc(title(report.direction) || '—')}</b></div>
+        <div class="detail-row"><span>Exposure</span><b>${meta.no_balance ? 'Disabled' : 'Per config'}</b></div>
+        <div class="detail-row"><span>Quality</span><b>${esc(report.quality_label || '—')}</b></div>
+        <div class="detail-row"><span>Output size</span><b>${(report.output_size_wh || []).join(' × ') || '—'}</b></div>
+      </div>`;
+  } catch (err) {
+    details.innerHTML = `<p class="text-xs text-mute">Could not load this job's details.</p>`;
+  }
+}
+
+function title(v) { return v ? String(v).charAt(0).toUpperCase() + String(v).slice(1) : ''; }
+function esc(s) { const d = document.createElement('div'); d.textContent = s ?? ''; return d.innerHTML; }
+
+/* ═══════════ JSON viewer ═══════════ */
+function switchJsonTab(name) {
+  jsonState.active = name;
+  ['config', 'report', 'batch'].forEach(t =>
+    document.getElementById(`jtab-${t}`).classList.toggle('tab-on', t === name));
+  renderJsonTab();
+}
+function renderJsonTab() {
+  const el = document.getElementById('json-view');
+  const active = jsonState.active;
+  if (active === 'batch' && !jsonState.batch) {
+    el.textContent = 'Not a batch run.';
+    el.classList.add('text-mute'); el.classList.remove('select-text'); return;
+  }
+  const raw = active === 'config' ? jsonState.config : active === 'report' ? jsonState.report : jsonState.batch;
+  el.classList.remove('text-mute'); el.classList.add('select-text');
+  if (!raw) { el.textContent = 'Select a job to view its JSON.'; return; }
+  el.innerHTML = raw.split('\n').map((line, i) =>
+    `<span class="code-line"><span class="code-no">${i + 1}</span>${esc(line) || ' '}</span>`).join('');
+}
+function copyJson() {
+  const active = jsonState.active;
+  const raw = active === 'config' ? jsonState.config : active === 'report' ? jsonState.report : jsonState.batch;
+  if (raw) navigator.clipboard.writeText(raw);
+}
+window.copyReportJson = null; /* replaced by each result partial */
+
+/* ═══════════ AI planning ═══════════ */
+const AI_STORE = 'cst-ai-settings';
+
+// No API keys are bundled with this repo. Enter your own OpenAI-compatible
+// endpoint + key in ⚙ AI settings — they are stored in your browser's
+// localStorage only and are sent per-run to this local server.
+const AI_DEFAULTS = {
+  planner: { base_url: '', api_key: '', model: '' },
+  reviewer: { base_url: '', api_key: '', model: '' },
+  max_attempts: 3,
+};
+function loadAiSettings() {
+  let stored = {};
+  try { stored = JSON.parse(localStorage.getItem(AI_STORE)) || {}; } catch (_) {}
+  return {
+    planner: { ...AI_DEFAULTS.planner, ...(stored.planner || {}) },
+    reviewer: { ...AI_DEFAULTS.reviewer, ...(stored.reviewer || {}) },
+    max_attempts: stored.max_attempts || AI_DEFAULTS.max_attempts,
+  };
+}
+function saveAiSettings() {
+  const s = {
+    planner: { base_url: val('ai-p-base'), api_key: val('ai-p-key'), model: val('ai-p-model') },
+    reviewer: { base_url: val('ai-r-base'), api_key: val('ai-r-key'), model: val('ai-r-model') },
+    max_attempts: parseInt(document.getElementById('ai-max-attempts').value) || 3,
+  };
+  localStorage.setItem(AI_STORE, JSON.stringify(s));
+  refreshAiUi();
+  function val(id) { return document.getElementById(id).value.trim(); }
+}
+function openAiModal() {
+  const s = loadAiSettings();
+  document.getElementById('ai-p-base').value = s.planner?.base_url || '';
+  document.getElementById('ai-p-key').value = s.planner?.api_key || '';
+  document.getElementById('ai-p-model').value = s.planner?.model || '';
+  document.getElementById('ai-r-base').value = s.reviewer?.base_url || '';
+  document.getElementById('ai-r-key').value = s.reviewer?.api_key || '';
+  document.getElementById('ai-r-model').value = s.reviewer?.model || '';
+  document.getElementById('ai-max-attempts').value = s.max_attempts || 3;
+  const m = document.getElementById('ai-modal');
+  m.classList.remove('hidden'); m.classList.add('flex');
+}
+function closeAiModal() {
+  const m = document.getElementById('ai-modal');
+  m.classList.add('hidden'); m.classList.remove('flex');
+}
+function refreshAiUi() {
+  const s = loadAiSettings();
+  const on = document.getElementById('ai-toggle').checked;
+  const summary = document.getElementById('ai-summary');
+  const btn = document.querySelector('#panel-json form button[type="submit"]');
+  const hasPlanner = s.planner?.base_url && s.planner?.model;
+  summary.classList.toggle('hidden', !(on && hasPlanner));
+  if (on && hasPlanner) {
+    summary.textContent = s.reviewer?.base_url && s.reviewer?.model
+      ? `${s.planner.model} → ${s.reviewer.model}`
+      : `${s.planner.model} (no reviewer)`;
+  }
+  btn.innerHTML = on
+    ? '<svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path d="M10 2a1 1 0 011 1v1.06a5.5 5.5 0 013.39 1.42l.75-.75a1 1 0 111.41 1.41l-.75.75A5.5 5.5 0 0117 10.25h1a1 1 0 110 2h-1.06a5.5 5.5 0 01-1.42 3.39l.75.75a1 1 0 11-1.41 1.41l-.75-.75A5.5 5.5 0 0111 18.44V19.5a1 1 0 11-2 0v-1.06a5.5 5.5 0 01-3.39-1.42l-.75.75a1 1 0 11-1.41-1.41l.75-.75A5.5 5.5 0 013 12.25H2a1 1 0 110-2h1.06a5.5 5.5 0 011.42-3.39l-.75-.75a1 1 0 111.41-1.41l.75.75A5.5 5.5 0 0110 4.06V3a1 1 0 011-1zm1 6.5a1 1 0 100 2 1 1 0 000-2z"/></svg> Run with AI plan'
+    : '<svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path d="M6.3 2.84A1.5 1.5 0 004 4.11v12.78a1.5 1.5 0 002.3 1.27l9.34-6.39a1.5 1.5 0 000-2.54L6.3 2.84z"/></svg> Run Custom Job';
+}
+function aiToggled() { refreshAiUi(); }
+
+async function aiRun() {
+  const s = loadAiSettings();
+  if (!s.planner?.base_url || !s.planner?.model) {
+    openAiModal();
+    return;
+  }
+  const file = document.getElementById('sources-editor').files[0];
+  if (!file) { showToast(); document.getElementById('paste-toast').textContent = '⚠ Stage an image first — AI planning runs on the staged photo'; return; }
+
+  const form = document.querySelector('#panel-json form');
+  const fd = new FormData();
+  fd.append('image', file, file.name);
+  fd.append('settings', JSON.stringify(s));
+  if (form.querySelector('input[name="no_balance"]').checked) fd.append('no_balance', 'on');
+
+  const btn = form.querySelector('button[type="submit"]');
+  const oldHtml = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '🤖 Asking the vision planner…';
+
+  await streamRun('ai', fd);
+  btn.disabled = false;
+  btn.innerHTML = oldHtml;
+  refreshAiUi();
+}
+
+/* Intercept the custom form submit when AI planning is on */
+document.querySelector('#panel-json form').addEventListener('submit', function (e) {
+  if (!document.getElementById('ai-toggle').checked) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  aiRun();
+}, true);
+
+/* ═══════════ Console ═══════════ */
+const CONSOLE_LEVELS = { info: 'text-slate-400', run: 'text-sky-400', ok: 'text-emerald-400',
+                         warn: 'text-amber-400', error: 'text-red-400', start: 'text-violet-400' };
+function logLine(stage, level, message) {
+  const box = document.getElementById('console');
+  if (box.dataset.clean !== '1') { box.innerHTML = ''; box.dataset.clean = '1'; }
+  const time = new Date().toTimeString().slice(0, 8);
+  const div = document.createElement('div');
+  div.innerHTML = `<span class="text-slate-600">${time}</span> `
+    + `<span class="${CONSOLE_LEVELS[level] || 'text-slate-400'}">${esc(stage)}</span> `
+    + `<span class="text-ink/90 break-all">${esc(message)}</span>`;
+  box.appendChild(div);
+  while (box.children.length > 300) box.removeChild(box.firstChild);
+  box.scrollTop = box.scrollHeight;
+}
+function clearConsole() {
+  const box = document.getElementById('console');
+  box.innerHTML = '';
+  box.dataset.clean = '1';
+}
+
+/* ═══════════ SSE run stream ═══════════ */
+async function streamRun(kind, fd) {
+  fd.append('kind', kind);
+  const spinner = document.getElementById('spinner');
+  spinner.classList.add('htmx-request');
+  logLine('start', 'start', `${kind} run started`);
+  try {
+    const res = await fetch('/runs/stream', { method: 'POST', body: fd });
+    if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf('\n\n')) >= 0) {
+        const block = buf.slice(0, i); buf = buf.slice(i + 2);
+        let event = 'message', data = '';
+        for (const line of block.split('\n')) {
+          if (line.startsWith('event:')) event = line.slice(6).trim();
+          else if (line.startsWith('data:')) data += line.slice(5).trim();
+        }
+        if (!data) continue;
+        if (event === 'done') {
+          const { html } = JSON.parse(data);
+          const target = document.getElementById('result');
+          target.innerHTML = html;
+          // innerHTML does not execute scripts — re-create them so partials run
+          target.querySelectorAll('script').forEach(old => {
+            const sc = document.createElement('script');
+            sc.textContent = old.textContent;
+            old.replaceWith(sc);
+          });
+        } else {
+          const e = JSON.parse(data);
+          logLine(e.stage, e.level, e.message);
+        }
+      }
+    }
+  } catch (err) {
+    logLine('error', 'error', `stream failed: ${err.message}`);
+  } finally {
+    spinner.classList.remove('htmx-request');
+  }
+}
+
+/* Intercept both run forms — every UI run now goes through the console stream */
+document.getElementById('example-form').addEventListener('submit', function (e) {
+  e.preventDefault(); e.stopImmediatePropagation();
+  streamRun('example', new FormData(this));
+}, true);
+
+document.querySelector('#panel-json form').addEventListener('submit', function (e) {
+  e.preventDefault(); e.stopImmediatePropagation();
+  const aiOn = document.getElementById('ai-toggle').checked;
+  if (aiOn) {
+    const st = loadAiSettings();
+    if (!st.planner?.base_url || !st.planner?.model) { openAiModal(); return; }
+    if (!document.getElementById('sources-editor').files.length) {
+      const t = document.getElementById('paste-toast');
+      t.textContent = '⚠ Stage an image first — AI planning runs on the staged photo';
+      showToast();
+      return;
+    }
+  }
+  streamRun(aiOn ? 'ai' : 'custom', new FormData(this));
+}, true);
+
+/* ═══════════ Docs modal ═══════════ */
+const DOC_TITLES = { readme: 'Documentation — README', engine: 'Engine API — ENGINE_README', configuration: 'Configuration Guide', samples: 'Samples Inventory' };
+async function openDocs(name) {
+  const modal = document.getElementById('doc-modal');
+  document.getElementById('doc-title').textContent = DOC_TITLES[name] || 'Documentation';
+  document.getElementById('doc-body').textContent = 'Loading…';
+  modal.classList.remove('hidden'); modal.classList.add('flex');
+  try {
+    const res = await fetch(`/api/docs/${name}`);
+    document.getElementById('doc-body').textContent = res.ok ? await res.text() : 'Not available.';
+  } catch (_) { document.getElementById('doc-body').textContent = 'Not available.'; }
+}
+function closeDocs() {
+  const modal = document.getElementById('doc-modal');
+  modal.classList.add('hidden'); modal.classList.remove('flex');
+}
+
+/* ═══════════ Lightbox ═══════════ */
+function openLightbox(src) {
+  document.getElementById('lightbox-img').src = src;
+  const lb = document.getElementById('lightbox');
+  lb.classList.remove('hidden'); lb.classList.add('flex');
+}
+function closeLightbox() {
+  const lb = document.getElementById('lightbox');
+  lb.classList.add('hidden'); lb.classList.remove('flex');
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,122 @@
+# Container Stitch Tester
+
+A local web tester for a deterministic, non-generative container-photo stitching engine.
+**AI proposes — OpenCV proves.** A vision model may plan *how* to interpret a photo
+(one container or several, stacked or side-by-side views, which surface to use), but a
+Python/OpenCV pipeline alone validates every claim and performs the actual stitch.
+No generative model ever touches image pixels.
+
+```
+image ──► AI vision planner (optional)  ──► ai_plan (normalized JSON)
+                                               │
+                                               ▼
+                                    config normalizer + validator
+                                               │
+                                      pass ◄──┴──► rejected
+                                        │              │
+                                        ▼              ▼
+                                 OpenCV stitch     diagnostics back
+                                 (only pixel          to the model
+                                 manipulation)        (capped retries)
+                                        │
+                                        ▼
+                               result.png + report.json
+```
+
+## Highlights
+
+- **Unified engine** (`container_stitch.py`): horizontal/vertical, single/combo,
+  three explicit methods — `rectify` (one complete view), `edge` (adjacent views,
+  overlap *not* verified), `overlap` (SIFT + RANSAC-verified shared surface).
+- **Direction safety** (v2.1): view-box positions are checked against the configured
+  direction; obvious contradictions (e.g. stacked views marked `horizontal`) are
+  rejected instead of producing misleading composites. `direction: "auto"` resolves
+  only unambiguous same-source layouts.
+- **Honest reporting**: processing success is separated from stitch quality —
+  reports carry `rectified_only`, `unverified_edge_composite`,
+  `overlap_requires_visual_review` or `rejected`; the UI colors them accordingly.
+- **AI planning (optional, off by default)**: plug in any OpenAI-compatible vision
+  endpoint (e.g. GLM, GPT) as planner and an optional second model as reviewer.
+  The planner returns an intermediate `ai_plan` with *normalized* coordinates and
+  confidence scores; the backend converts it to an engine config. Rejections are
+  sent back with diagnostics for a capped number of retries. If the reviewer is
+  unreachable the planner takes over automatically without consuming an attempt.
+  **The engine's validation is final — the AI cannot override a rejection.**
+- **Live console**: every run streams its stages (staging, AI calls, engine
+  verdicts, retries, fallbacks) to an in-page console via SSE.
+- **Paste-to-stitch**: paste an image anywhere; a default two-half config is
+  generated automatically with orientation detected from the aspect ratio.
+
+## Setup
+
+Python 3.11+ (pinned versions in `requirements.txt`):
+
+```bash
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python app.py
+```
+
+Open http://127.0.0.1:8000/
+
+This is a local development tool: Flask's development server with debug enabled,
+bound to localhost. Do not expose it to untrusted users. AI endpoint URLs and API
+keys are entered in the UI and stored only in your browser's localStorage; they are
+forwarded per-run to this local server, which calls the configured endpoint directly.
+
+## Sample images are not included
+
+This repository intentionally **excludes the original sample photographs** and their
+derived outputs (`sources/`, `examples/`, preview collages). They were supplied for
+private testing only. `samples_manifest.json` and `sha256_manifest.json` document
+what the private bundle contained (filenames, dimensions, checksums) so results can
+be audited against it. The packaged JSON recipes in `configs/` reference those
+excluded files by relative path + SHA-256 — point them at your own copies of the
+images (byte-identical) or write configs for your own photos.
+
+Most tests run without the samples: `python -m unittest discover -s tests`
+executes the synthetic-fixture suite (48 tests) and automatically **skips** the 32
+recipes that require the private bundle — 80 tests total in a private checkout.
+
+## Method limits (deliberate)
+
+`rectify` straightens one selected region; `edge` joins explicitly selected sections
+without proving overlap; `overlap` estimates and checks an operator-confirmed shared
+surface. Failed overlap is rejected, never silently replaced by an edge join.
+Corner selection and container grouping are operator/AI-proposed inputs, not
+detections. No OCR, no inpainting, no learned super-resolution, no reconstruction of
+occluded or out-of-frame surfaces. Warping resamples pixels — keep the original
+photographs as the authoritative record.
+
+## AI planning rules
+
+1. The model returns a strict intermediate JSON plan (never an engine config):
+   scene layout, container grouping, per-region view boxes/quads in **normalized**
+   coordinates, preferred method, confidence scores, exclusions, reason.
+2. The backend clamps/converts coordinates, injects image dimensions, and emits a
+   normal engine config.
+3. The engine validates everything again (corner geometry, direction consistency,
+   SIFT/RANSAC overlap proof, homography sanity, scale/rotation bounds).
+4. Rejections feed back to the model as diagnostics; attempts are capped (2–4).
+5. `confidence.same_surface < threshold` plans should not request `overlap`; if they
+   do and the geometry disagrees, the engine wins.
+
+## Repository layout
+
+```
+app.py                  Flask + HTMX web tester (runs, live console, AI planning)
+ai_planner.py           AI vision-planner bridge (plan parse/validate/normalize)
+container_stitch.py     The deterministic stitching engine (no network, no AI)
+templates/, static/     Tailwind-based UI
+configs/                Packaged JSON recipes (reference excluded sample paths)
+tests/                  80 unit/regression tests + synthetic fixtures
+validation/             Packaging and run-validation logs
+```
+
+## Status
+
+Development preview. The engine is conservative by design: it refuses to guess
+container identity, refuses physically implausible fits, and labels every output
+with what was and was not verified. See `CHANGELOG.md`, `ENGINE_README.md` and
+`CONFIGURATION.md` for details.

@@ -1,0 +1,66 @@
+{
+  "expected_size_wh": [
+    2048,
+    448
+  ],
+  "height": 320,
+  "gap": 12,
+  "panels": [
+    {
+      "label": "SKLU 055189 6",
+      "view_box": [
+        0,
+        0,
+        1024,
+        448
+      ],
+      "quad": [
+        [
+          329,
+          22
+        ],
+        [
+          1023,
+          27
+        ],
+        [
+          1023,
+          338
+        ],
+        [
+          323,
+          330
+        ]
+      ],
+      "coverage_note": "Right edge is cut by the montage split. Only the supplied visible side region is retained."
+    },
+    {
+      "label": "SKLU 240755 3",
+      "view_box": [
+        1024,
+        0,
+        2048,
+        448
+      ],
+      "quad": [
+        [
+          0,
+          12
+        ],
+        [
+          617,
+          21
+        ],
+        [
+          620,
+          324
+        ],
+        [
+          0,
+          320
+        ]
+      ],
+      "coverage_note": "Left part, including some lettering, is clipped in the original. It stays clipped in this output."
+    }
+  ]
+}

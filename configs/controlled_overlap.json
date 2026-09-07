@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "mode": "single",
+  "height": 320,
+  "gap_px": 12,
+  "sources": {
+    "left": {
+      "path": "../tests/fixtures/overlap_left.png",
+      "expected_size_wh": [
+        530,
+        310
+      ],
+      "sha256": "5ac1e8aa516980672be19cd97452cd3ccc340a4ffe8428726b889d5f672b0822"
+    },
+    "right": {
+      "path": "../tests/fixtures/overlap_right.png",
+      "expected_size_wh": [
+        424,
+        310
+      ],
+      "sha256": "325c47f9745d0d3412f2564feb8ebc20447f5f1c63f299cc462107c316e31939"
+    }
+  },
+  "containers": [
+    {
+      "key": "controlled",
+      "method": "overlap",
+      "same_surface_confirmed": true,
+      "regions": [
+        {
+          "source": "left",
+          "quad": [
+            [
+              0,
+              0
+            ],
+            [
+              529,
+              0
+            ],
+            [
+              529,
+              309
+            ],
+            [
+              0,
+              309
+            ]
+          ]
+        },
+        {
+          "source": "right",
+          "quad": [
+            [
+              0,
+              0
+            ],
+            [
+              423,
+              0
+            ],
+            [
+              423,
+              309
+            ],
+            [
+              0,
+              309
+            ]
+          ]
+        }
+      ],
+      "matching": {
+        "min_inliers": 20,
+        "feather_px": 32
+      }
+    }
+  ],
+  "notes": "CONTROLLED TEST ONLY: overlapping crops of one photograph, not independent camera validation."
+}
