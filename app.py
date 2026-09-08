@@ -702,7 +702,7 @@ def create_app() -> Flask:
     return app
 
 
-def _noop_emit(stage, level, message):
+def _noop_emit(stage, message):
     pass
 
 
@@ -900,6 +900,10 @@ def panel_from_report(report: dict, job_id: str, out_dir: Path, runtime_ms: int,
         panel["result_url"] = url_for("job_file", job_id=job_id, filename="result.png")
         size = result_path.stat().st_size
         panel["file_size"] = human_size(size)
+    if (out_dir / "debug_overlay.png").is_file():
+        panel["debug_url"] = url_for("job_file", job_id=job_id, filename="debug_overlay.png")
+    if (out_dir / "diagnostics.json").is_file():
+        panel["diag_url"] = url_for("job_file", job_id=job_id, filename="diagnostics.json")
     for record in report.get("source_records", []) or []:
         name = record.get("name", "")
         panel["sources"].append({
@@ -982,6 +986,7 @@ def render_result_error(message: str, job_id: str | None = None) -> str:
         title="Run rejected",
         job_id=job_id,
         panel={"kind": "error", "label": "Run rejected", "status": "rejected",
+               "debug_url": None, "diag_url": None,
                "processing_state": "rejected", "quality_state": "rejected", "quality_label": "",
                "runtime_ms": None, "mode": "", "direction": "", "result_url": None,
                "sources": [], "output_size_wh": None, "file_size": None,

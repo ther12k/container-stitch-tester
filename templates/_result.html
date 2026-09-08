@@ -164,7 +164,23 @@
         <p class="text-[9px] text-mute mt-1.5">
           <code class="font-mono bg-soft px-1 py-0.5 rounded">{{ job_id }}</code> ·
           <a href="#" onclick="selectJob('{{ job_id }}');return false;" class="text-blue-600 hover:underline">inspect details</a>
+          {% if panel.debug_url %} ·
+            <a href="{{ panel.debug_url }}" target="_blank" class="text-blue-600 hover:underline">debug overlay ↗</a>
+          {% endif %}
         </p>
+
+        {% if panel.debug_url %}
+          <details class="mt-2">
+            <summary class="text-[10px] text-mute cursor-pointer hover:text-ink">
+              🔍 Why this stitch passed or failed — debug overlay
+              {% if panel.diag_url %}(<a href="{{ panel.diag_url }}" target="_blank" onclick="event.stopPropagation()" class="text-blue-600 hover:underline">diagnostics.json</a>){% endif %}
+            </summary>
+            <a href="{{ panel.debug_url }}" target="_blank">
+              <img src="{{ panel.debug_url }}" alt="Debug overlay"
+                   class="w-full max-h-[30vh] object-contain rounded-md border border-line bg-white mt-1.5">
+            </a>
+          </details>
+        {% endif %}
       </div>
     </div>
   {% endif %}

@@ -93,7 +93,9 @@ class VerticalTests(unittest.TestCase):
             cs.run_job(path, out, **kwargs)
         if contains:
             self.assertIn(contains, str(exc.exception))
-        self.assertEqual({p.name for p in out.iterdir()}, {'report.json'})
+        self.assertEqual({p.name for p in out.iterdir()}
+                         - {'debug_overlay.png', 'diagnostics.json', 'containers'},
+                         {'report.json'})
         r = json.loads((out/'report.json').read_text())
         self.assertFalse(r['result_created'])
         self.assertFalse(r['fallback_to_edge'])
@@ -304,7 +306,9 @@ class VerticalTests(unittest.TestCase):
         self.assertTrue((out/'good/result.png').is_file())
         self.assertFalse((out/'bad/result.png').exists())
         self.assertTrue((out/'batch_report.json').is_file())
-        self.assertEqual({p.name for p in (out/'bad').iterdir()}, {'report.json'})
+        self.assertEqual({p.name for p in (out/'bad').iterdir()}
+                         - {'debug_overlay.png', 'diagnostics.json', 'containers'},
+                         {'report.json'})
 
     def test_29_duplicate_batch_key_rejected_before_output_claim(self):
         cfg, _ = self.write(self.cfg())

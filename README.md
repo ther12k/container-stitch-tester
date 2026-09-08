@@ -42,6 +42,12 @@ image ──► AI vision planner (optional)  ──► ai_plan (normalized JSON
   sent back with diagnostics for a capped number of retries. If the reviewer is
   unreachable the planner takes over automatically without consuming an attempt.
   **The engine's validation is final — the AI cannot override a rejection.**
+- **Debug overlay** (`debug_overlay.png` + `diagnostics.json` per job): one sheet
+  answers "why did this stitch pass or fail?" — configured corners, feature matches
+  (inliers vs rejected), projected quads, overlap polygon, seam + feather band,
+  compact metrics, and for rejections the exact reason printed on the image.
+  Deterministic engine artifact; it only draws decisions already made and never
+  re-evaluates quality.
 - **Live console**: every run streams its stages (staging, AI calls, engine
   verdicts, retries, fallbacks) to an in-page console via SSE.
 - **Paste-to-stitch**: paste an image anywhere; a default two-half config is

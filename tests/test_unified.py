@@ -83,7 +83,9 @@ class UnifiedTests(unittest.TestCase):
         with self.assertRaises(cs.ProcessingError) as ctx:
             cs.run_job(cpath,out,**kwargs)
         if text:self.assertIn(text,str(ctx.exception))
-        self.assertEqual({p.name for p in out.iterdir()},{'report.json'})
+        self.assertEqual({p.name for p in out.iterdir()}
+                         - {'debug_overlay.png', 'diagnostics.json', 'containers'},
+                         {'report.json'})
         r=json.loads((out/'report.json').read_text())
         self.assertEqual(r['status'],'rejected')
         self.assertFalse(r['result_created'])

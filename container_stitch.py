@@ -311,6 +311,7 @@ class Tile:
     geometry: np.ndarray
     sources: np.ndarray
     report: dict[str, Any]
+    diagnostics: "StitchDiagnostics | None" = None
 
 
 def legacy_to_job(config: dict[str, Any], source_path: str) -> dict[str, Any]:
@@ -801,6 +802,288 @@ def directional_blend(a: np.ndarray, va: np.ndarray, b: np.ndarray, vb: np.ndarr
                            "feather_px": feather, "axis": "y" if direction == "vertical" else "x"}
 
 
+# ------------------------------------------------------------------ diagnostics
+# Deterministic "why did this stitch pass or fail" artifacts. The overlay only
+# DRAWS decisions the engine already made; it never evaluates quality itself,
+# and AI planning never enters this path.
+
+
+@dataclass
+class StitchDiagnostics:
+    """Machine-readable record of one container group's stitch decision.
+
+    Coordinates: detected_corners are absolute source-image pixels;
+    match_points_* are in the first/second region-view spaces;
+    projected_bounds/overlap_polygon/seam_points are in stitched-output space.
+    """
+    method: str
+    status: str
+    quality_state: str
+    direction: str
+    source_size_wh: list[list[int]]
+    detected_corners: list[list[list[float]]]
+    rejection_reason: str | None = None
+    matches_total: int | None = None
+    inliers: int | None = None
+    inlier_ratio: float | None = None
+    match_points_first: list[list[float]] | None = None
+    match_points_second: list[list[float]] | None = None
+    inlier_mask: list[bool] | None = None
+    homography_second_to_first: list[list[float]] | None = None
+    projected_bounds: list[int] | None = None
+    projected_quad_first: list[list[float]] | None = None
+    projected_quad_second: list[list[float]] | None = None
+    overlap_polygon: list[list[int]] | None = None
+    overlap_ratio: float | None = None
+    seam_points: list[list[int]] | None = None
+    feather_px: int | None = None
+    median_reprojection_error_px: float | None = None
+    sanity: dict[str, Any] | None = None
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1, "method": self.method, "status": self.status,
+            "quality_state": self.quality_state, "direction": self.direction,
+            "source_size_wh": self.source_size_wh, "detected_corners": self.detected_corners,
+            "rejection_reason": self.rejection_reason, "matches_total": self.matches_total,
+            "inliers": self.inliers,
+            "inlier_ratio": self.inlier_ratio,
+            "match_points_first": self.match_points_first,
+            "match_points_second": self.match_points_second,
+            "inlier_mask": self.inlier_mask,
+            "homography_second_view_to_first_view": self.homography_second_to_first,
+            "projected_bounds_xyxy": self.projected_bounds,
+            "projected_quad_first_in_output": self.projected_quad_first,
+            "projected_quad_second_in_output": self.projected_quad_second,
+            "overlap_polygon_in_output": self.overlap_polygon,
+            "overlap_ratio": self.overlap_ratio,
+            "seam_points_in_output": self.seam_points,
+            "feather_px": self.feather_px,
+            "median_reprojection_error_px": self.median_reprojection_error_px,
+            "sanity_checks": self.sanity or {},
+            "note": "Deterministic engine diagnostic. Rendering never re-evaluates quality.",
+        }
+
+
+_DIAG_COLORS = {  # BGR, fixed palette — no randomness enters the overlay.
+    "corner": (0, 165, 255), "frame": (200, 200, 200),
+    "inlier": (60, 200, 60), "rejected": (60, 60, 230),
+    "quad_first": (255, 160, 40), "quad_second": (0, 165, 255),
+    "overlap": (60, 200, 60), "seam": (0, 230, 230), "feather": (180, 120, 40),
+    "text": (255, 255, 255), "text_bg": (24, 24, 24), "reason": (60, 60, 255),
+}
+
+
+def _fit_text(img: np.ndarray, x: int, y: int, text: str, scale: float,
+              color=(255, 255, 255), thickness: int = 1, bg: bool = True) -> None:
+    if bg:
+        (tw, th), base = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, thickness)
+        cv2.rectangle(img, (x - 2, y - th - 3), (x + tw + 2, y + base + 2), _DIAG_COLORS["text_bg"], -1)
+    cv2.putText(img, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, thickness, cv2.LINE_AA)
+
+
+def _wrap(text: str, width: int) -> list[str]:
+    lines, line = [], ""
+    for word in text.split():
+        if len(line) + len(word) + 1 > width:
+            lines.append(line)
+            line = word
+        else:
+            line = f"{line} {word}".strip()
+    if line:
+        lines.append(line)
+    return lines
+
+
+def render_debug_overlay(panels: list[tuple[np.ndarray, list[int]]],
+                         diag: StitchDiagnostics, result_image: np.ndarray | None,
+                         out: Path, max_width: int = 1500) -> None:
+    """Draw one deterministic diagnostic sheet for a container group.
+
+    panels: [(region_image_crop, view_box), ...] in region order;
+    result_image: stitched output (BGRA) when one was produced.
+    Layout: [panel A | panel B] match sheet on top, output-space sheet below,
+    metrics bar at the very top; rejection reason printed in red when rejected.
+    """
+    crops = []
+    for image, box in panels:
+        x0, y0, x1, y1 = box
+        crops.append(image[y0:y1, x0:x1][:, :, :3].copy() if image.ndim == 3 else image[y0:y1, x0:x1].copy())
+
+    def scaled(img: np.ndarray, target_h: int) -> np.ndarray:
+        h = img.shape[0]
+        return img if h <= 0 or abs(h - target_h) <= 1 else cv2.resize(
+            img, (max(1, round(img.shape[1] * target_h / h)), target_h), interpolation=cv2.INTER_AREA)
+
+    # ── match sheet: regions side by side, quads + matches drawn ──
+    band_h = 380
+    match_sheet = None
+    if crops:
+        shown = [scaled(c, band_h) for c in crops]
+        gap = 8
+        total_w = sum(c.shape[1] for c in shown) + gap * (len(shown) - 1)
+        match_sheet = np.full((band_h, total_w, 3), 24, np.uint8)
+        offsets, x = [], 0
+        for c in shown:
+            match_sheet[:, x:x + c.shape[1]] = c
+            offsets.append(x)
+            x += c.shape[1] + gap
+        scale_f = [c.shape[1] / max(1, crops[i].shape[1]) for i, c in enumerate(shown)]
+        for i, (crop, (_, box)) in enumerate(zip(crops, panels)):
+            x0b, y0b = box[0], box[1]
+            fx, fy = scale_f[i], band_h / max(1, crop.shape[0])
+            if i < len(diag.detected_corners):
+                pts = np.float32(diag.detected_corners[i]) - np.float32([x0b, y0b])
+                pts = np.rint(pts * np.float32([fx, fy])).astype(np.int32)
+                cv2.polylines(match_sheet, [pts], True, _DIAG_COLORS["corner"], 2, cv2.LINE_AA)
+                for j, pt in enumerate(pts):
+                    cv2.circle(match_sheet, tuple(pt), 3, _DIAG_COLORS["corner"], -1)
+        if diag.match_points_first and diag.match_points_second and len(crops) == 2:
+            fx0, fy0 = scale_f[0], band_h / max(1, crops[0].shape[0])
+            fx1, fy1 = scale_f[1], band_h / max(1, crops[1].shape[0])
+            mask = diag.inlier_mask or []
+            inlier_idx = [i for i in range(len(diag.match_points_first))
+                          if i < len(mask) and mask[i]]
+            # deterministic display cap: dense matches would render as a smear
+            shown_inliers = inlier_idx
+            if len(shown_inliers) > 120:
+                step = len(shown_inliers) / 120.0
+                shown_inliers = [inlier_idx[int(i * step)] for i in range(120)]
+            shown = set(shown_inliers)
+            for idx, (p1, p2) in enumerate(zip(diag.match_points_first, diag.match_points_second)):
+                ok = idx in shown
+                color = _DIAG_COLORS["inlier"] if ok else _DIAG_COLORS["rejected"]
+                a = tuple(np.rint(np.float32(p1) * np.float32([fx0, fy0])).astype(int))
+                b = tuple(np.rint(np.float32(p2) * np.float32([fx1, fy1])).astype(int) + np.int32([offsets[1], 0]))
+                cv2.circle(match_sheet, a, 3 if ok else 2, color, -1)
+                cv2.circle(match_sheet, b, 3 if ok else 2, color, -1)
+                if ok:
+                    cv2.line(match_sheet, a, b, color, 1, cv2.LINE_AA)
+            if len(inlier_idx) > len(shown_inliers):
+                _fit_text(match_sheet, offsets[1] + 6, band_h - 8,
+                          f"showing {len(shown_inliers)} of {len(inlier_idx)} inliers",
+                          0.42, _DIAG_COLORS["inlier"], 1)
+
+    # ── output-space sheet: result + projected quads + overlap + seam ──
+    out_sheet = None
+    if result_image is not None and result_image.shape[0] > 0:
+        base = result_image[:, :, :3].copy() if result_image.ndim == 3 else result_image.copy()
+        out_h = 380
+        s = out_h / max(1, base.shape[0])
+        base = cv2.resize(base, (max(1, round(base.shape[1] * s)), out_h), interpolation=cv2.INTER_AREA)
+        overlay = base.copy()
+        if diag.projected_quad_first is not None:
+            pts = np.rint(np.float32(diag.projected_quad_first) * s).astype(np.int32)
+            cv2.polylines(overlay, [pts], True, _DIAG_COLORS["quad_first"], 2, cv2.LINE_AA)
+        if diag.projected_quad_second is not None:
+            pts = np.rint(np.float32(diag.projected_quad_second) * s).astype(np.int32)
+            cv2.polylines(overlay, [pts], True, _DIAG_COLORS["quad_second"], 2, cv2.LINE_AA)
+        if diag.overlap_polygon and len(diag.overlap_polygon) >= 3:
+            pts = np.rint(np.float32(diag.overlap_polygon) * s).astype(np.int32)
+            mask_img = np.zeros(base.shape[:2], np.uint8)
+            cv2.fillPoly(mask_img, [pts], 255)
+            overlay[mask_img > 0] = np.rint(0.55 * overlay[mask_img > 0]
+                                            + 0.45 * np.float32(_DIAG_COLORS["overlap"])).astype(np.uint8)
+            cv2.polylines(overlay, [pts], True, _DIAG_COLORS["overlap"], 2, cv2.LINE_AA)
+        if diag.seam_points and len(diag.seam_points) >= 2:
+            seam = np.float32(diag.seam_points) * s
+            if diag.feather_px:
+                band = max(1.5, float(diag.feather_px) * s / 2)
+                vec = seam[-1] - seam[0]
+                norm = np.float32([-vec[1], vec[0]])
+                length = float(np.hypot(*norm)) or 1.0
+                normal = norm / length
+                side_a = np.rint(seam + band * normal).astype(np.int32)
+                side_b = np.rint(seam - band * normal).astype(np.int32)
+                poly = np.vstack([side_a, side_b[::-1]])
+                band_mask = np.zeros(base.shape[:2], np.uint8)
+                cv2.fillPoly(band_mask, [poly], 255)
+                overlay[band_mask > 0] = np.rint(
+                    0.72 * overlay[band_mask > 0]
+                    + 0.28 * np.float32(_DIAG_COLORS["feather"])).astype(np.uint8)
+            pts = np.rint(seam).astype(np.int32)
+            cv2.polylines(overlay, [pts], False, _DIAG_COLORS["seam"], 2, cv2.LINE_AA)
+        cv2.rectangle(overlay, (0, 0), (overlay.shape[1] - 1, overlay.shape[0] - 1),
+                      _DIAG_COLORS["frame"], 1)
+        out_sheet = overlay
+
+    # ── compose sheets + metrics bar ──
+    sheets = [sh for sh in (match_sheet, out_sheet) if sh is not None]
+    if not sheets:
+        sheets = [np.full((120, 480, 3), 24, np.uint8)]
+    max_w = max(sh.shape[1] for sh in sheets)
+    padded = []
+    for label, sh in zip(
+            [lab for lab, sht in (("match sheet", match_sheet), ("stitched output", out_sheet)) if sht is not None],
+            sheets):
+        left = (max_w - sh.shape[1]) // 2
+        canvas = np.pad(sh, ((0, 0), (left, max_w - sh.shape[1] - left), (0, 0)),
+                        constant_values=24)
+        _fit_text(canvas, 8, 16, label, 0.42, (160, 160, 160), 1)
+        padded.append(canvas)
+    body = np.vstack(padded)
+
+    metrics = [f"{diag.method}  |  {diag.status}  |  quality: {diag.quality_state}"]
+    if diag.matches_total is not None:
+        ratio = f" ({100 * diag.inlier_ratio:.0f}%)" if diag.inlier_ratio is not None else ""
+        err = f" | median err {diag.median_reprojection_error_px:.2f}px" if diag.median_reprojection_error_px is not None else ""
+        metrics.append(f"matches {diag.matches_total} | inliers {diag.inliers}{ratio}{err}")
+    extra = []
+    if diag.overlap_ratio is not None:
+        extra.append(f"overlap {100 * diag.overlap_ratio:.0f}%")
+    if diag.feather_px is not None:
+        extra.append(f"feather {diag.feather_px}px")
+    if diag.projected_bounds is not None:
+        extra.append(f"bounds {diag.projected_bounds}")
+    if extra:
+        metrics.append(" | ".join(extra))
+
+    bar_lines = len(metrics) + (len(_wrap(diag.rejection_reason, 92)) if diag.rejection_reason else 0)
+    bar = np.full((22 * (bar_lines + 1) + 8, max_w, 3), 24, np.uint8)
+    y = 20
+    for line in metrics:
+        _fit_text(bar, 10, y, line, 0.5, _DIAG_COLORS["text"], 1)
+        y += 22
+    if diag.rejection_reason:
+        for line in _wrap(f"REJECTED: {diag.rejection_reason}", 92):
+            _fit_text(bar, 10, y, line, 0.55, _DIAG_COLORS["reason"], 2)
+            y += 22
+
+    sheet = np.vstack([bar, body])
+    if sheet.shape[1] > max_width:
+        sc = max_width / sheet.shape[1]
+        sheet = cv2.resize(sheet, (max_width, max(1, round(sheet.shape[0] * sc))),
+                           interpolation=cv2.INTER_AREA)
+    save_image(out, cv2.cvtColor(sheet, cv2.COLOR_BGR2BGRA))
+
+
+def _seam_polyline(t: np.ndarray, valid: np.ndarray, direction: str) -> list[list[int]]:
+    """Extract the t=0.5 crossing per cross-line from the blend weight map."""
+    pts: list[list[int]] = []
+    if direction == "horizontal":
+        for y in range(t.shape[0]):
+            row = t[y]
+            idx = np.flatnonzero((row[:-1] <= .5) & (row[1:] > .5))
+            if len(idx):
+                pts.append([int(idx[0]), y])
+    else:
+        for x in range(t.shape[1]):
+            col = t[:, x]
+            idx = np.flatnonzero((col[:-1] <= .5) & (col[1:] > .5))
+            if len(idx):
+                pts.append([x, int(idx[0])])
+    return pts[:2000]
+
+
+def _largest_overlap_polygon(va: np.ndarray, vb: np.ndarray) -> list[list[int]] | None:
+    overlap = (va & vb).astype(np.uint8)
+    contours, _ = cv2.findContours(overlap, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+    hull = cv2.convexHull(max(contours, key=cv2.contourArea))
+    return hull.reshape(-1, 2).tolist()
+
+
 def overlap_group(group: Group, cross_size: int, out: Path, direction: str = "horizontal") -> Tile:
     a, b = group.regions
     cfg = group.config.get("matching", {})
@@ -834,16 +1117,17 @@ def overlap_group(group: Group, cross_size: int, out: Path, direction: str = "ho
                                            "min_inlier_ratio": .35, "contrast_threshold": contrast}}
     if direction == "horizontal":
         stats["keypoints_left_right"] = [len(ka), len(kb)]
-    if len(matches) < minimum:
-        raise ProcessingError(f"Only {len(matches)} unique symmetric matches; need {minimum} for overlap mode.", stats)
     src = np.float32([kb[m.queryIdx].pt for m in matches])
     dst = np.float32([ka[m.trainIdx].pt for m in matches])
+    stats.update(match_points_second=src.tolist(), match_points_first=dst.tolist())
+    if len(matches) < minimum:
+        raise ProcessingError(f"Only {len(matches)} unique symmetric matches; need {minimum} for overlap mode.", stats)
     Hfit, status = cv2.findHomography(src, dst, cv2.RANSAC, threshold,
                                      maxIters=30000 if space == "rectified" else 5000, confidence=.999)
     if Hfit is None or status is None:
         raise ProcessingError("RANSAC could not estimate an overlap homography.", stats)
     good = status.ravel().astype(bool)
-    stats.update(inliers=int(good.sum()), inlier_ratio=float(good.mean()))
+    stats.update(inliers=int(good.sum()), inlier_ratio=float(good.mean()), inlier_mask=good.tolist())
     if good.sum() < minimum or good.mean() < .35:
         raise ProcessingError(f"Weak overlap fit: {int(good.sum())}/{len(matches)} inliers.", stats)
     coverage = []
@@ -922,12 +1206,37 @@ def overlap_group(group: Group, cross_size: int, out: Path, direction: str = "ho
                 "Review feature_matches.jpg and hard_seam.png; no camera calibration or identity verification was performed."]
     if int(good.sum()) < 20:
         warnings.append("Limited feature support: fewer than 20 inliers. Sample-specific lower minimum was explicitly configured.")
+    seam_pts = _seam_polyline(t, valid, direction)
+    diagnostics = StitchDiagnostics(
+        method="overlap", status="overlap_estimated_requires_visual_review",
+        quality_state="overlap_requires_visual_review", direction=direction,
+        source_size_wh=[[a.image.shape[1], a.image.shape[0]], [b.image.shape[1], b.image.shape[0]]],
+        detected_corners=[(a.quad + np.float32(a.box[:2])).tolist(),
+                          (b.quad + np.float32(b.box[:2])).tolist()],
+        matches_total=len(matches), inliers=int(good.sum()), inlier_ratio=float(good.mean()),
+        match_points_first=dst.tolist(), match_points_second=src.tolist(),
+        inlier_mask=good.tolist(), homography_second_to_first=H.tolist(),
+        projected_bounds=[int(low[0]), int(low[1]), int(high[0]), int(high[1])],
+        projected_quad_first=(qa - low).tolist(), projected_quad_second=(qb - low).tolist(),
+        overlap_polygon=_largest_overlap_polygon(va, vb), overlap_ratio=fraction,
+        seam_points=seam_pts if seam_report.get("policy") == "union" else
+        ([[seam_report["position_px"], 0], [seam_report["position_px"], height - 1]]
+         if direction == "horizontal" else
+         [[0, seam_report["position_px"]], [width - 1, seam_report["position_px"]]]),
+        feather_px=feather, median_reprojection_error_px=float(np.median(error)),
+        sanity={"min_inliers": bool(int(good.sum()) >= minimum),
+                "inlier_ratio": bool(good.mean() >= .35),
+                "scale_bounds": bool(.25 <= scale <= 4),
+                "cross_edge_rotation": bool(abs(angle) <= 20),
+                "extends_along_axis": True,
+                "reprojection_residuals": True})
     report = {"method": "overlap", "status": "overlap_estimated_requires_visual_review",
               "overlap_alignment_applied": True, "independently_verified_overlap": False,
               "same_surface_confirmed_by_operator": True, "matching": stats, "seam": seam_report,
-              "exposure": {"enabled": False}, "regions": [a.report(WA), b.report(WB)], "warnings": warnings}
+              "exposure": {"enabled": False}, "regions": [a.report(WA), b.report(WB)],
+              "warnings": warnings, "diagnostics": diagnostics.to_payload()}
     image = bgra(pixels, valid)
-    return Tile(image, image.copy(), provenance, report)
+    return Tile(image, image.copy(), provenance, report, diagnostics)
 
 
 def process_group(group: Group, cross_size: int, out: Path, no_balance: bool,
@@ -949,10 +1258,18 @@ def process_group(group: Group, cross_size: int, out: Path, no_balance: bool,
     if method == "rectify":
         image = geometry.copy()
         provenance = np.where(valids[0], group.regions[0].bit, 0).astype(np.uint16)
+        region0 = group.regions[0]
+        diagnostics = StitchDiagnostics(
+            method="rectify", status="rectified_visible_panel", quality_state="rectified_only",
+            direction=direction,
+            source_size_wh=[[region0.image.shape[1], region0.image.shape[0]]],
+            detected_corners=[(region0.quad + np.float32(region0.box[:2])).tolist()],
+            sanity={"no_stitch_needed": True})
         report = {"method": "rectify", "status": "rectified_visible_panel",
                   "overlap_alignment_applied": False, "independently_verified_overlap": False,
-                  "exposure": {"enabled": False}, "regions": [group.regions[0].report(transforms[0])],
-                  "warnings": ["Manually selected visible panel; no new surface coverage was reconstructed."]}
+                  "exposure": {"enabled": False}, "regions": [region0.report(transforms[0])],
+                  "warnings": ["Manually selected visible panel; no new surface coverage was reconstructed."],
+                  "diagnostics": diagnostics.to_payload()}
     else:
         a, b = group.regions
         cfg = group.config.get("exposure", {})
@@ -971,6 +1288,20 @@ def process_group(group: Group, cross_size: int, out: Path, no_balance: bool,
         offset = np.float64([[1, 0, seam if direction == "horizontal" else 0],
                              [0, 1, seam if direction == "vertical" else 0], [0, 0, 1]])
         diagnostic = edge_diagnostic(a, b, out)
+        out_w, out_h = image.shape[1], image.shape[0]
+        seam_pts = ([[seam, 0], [seam, out_h - 1]] if direction == "horizontal"
+                    else [[0, seam], [out_w - 1, seam]])
+        fade = int(exposure.get("fade_px", 0)) if isinstance(exposure, dict) else 0
+        edge_diag = StitchDiagnostics(
+            method="edge", status="manual_edge_join_unverified",
+            quality_state="unverified_edge_composite", direction=direction,
+            source_size_wh=[[a.image.shape[1], a.image.shape[0]], [b.image.shape[1], b.image.shape[0]]],
+            detected_corners=[(a.quad + np.float32(a.box[:2])).tolist(),
+                              (b.quad + np.float32(b.box[:2])).tolist()],
+            matches_total=diagnostic.get("best_mutual_unique_candidates"),
+            seam_points=seam_pts, feather_px=fade or None,
+            sanity={"overlap_verified": False,
+                    "note": "edge adjacency is configured, not feature-proven"})
         report = {"method": "edge", "status": "manual_edge_join_unverified",
                   "overlap_alignment_applied": False, "independently_verified_overlap": False,
                   "same_surface_confirmed_by_operator": True,
@@ -979,9 +1310,11 @@ def process_group(group: Group, cross_size: int, out: Path, no_balance: bool,
                   "regions": [a.report(transforms[0]), b.report(offset @ transforms[1])],
                   "warnings": ["No overlap was established or removed; edge adjacency comes from the configuration.",
                                "Physical proportions, surface continuity and corrugation count at the seam are unverified.",
-                               "Exposure balancing assumes comparable paint and can alter appearance near the seam."]}
+                               "Exposure balancing assumes comparable paint and can alter appearance near the seam."],
+                  "diagnostics": edge_diag.to_payload()}
     check_size(image.shape[1], image.shape[0])
-    return Tile(image, geometry, provenance, report)
+    diag_obj = edge_diag if method == "edge" else (diagnostics if method == "rectify" else None)
+    return Tile(image, geometry, provenance, report, diag_obj)
 
 
 def run_job(config_path: Path | str, out: Path | str, *, mode: str | None = None,
@@ -989,9 +1322,10 @@ def run_job(config_path: Path | str, out: Path | str, *, mode: str | None = None
             no_balance: bool = False, direction: str | None = None) -> dict[str, Any]:
     """Process a trusted local JSON job; return the committed report or raise ProcessingError.
 
-    The output path MUST NOT exist. A failed job leaves only report.json with
-    status=rejected; no final/partial composites are published. Use one process
-    per job for parallel workers (OpenCV thread/RNG configuration is global).
+    The output path MUST NOT exist. A failed job leaves report.json plus
+    diagnostics-only artifacts (debug_overlay.png / diagnostics.json showing the
+    exact rejection reason); no final/partial composites are published. Use one
+    process per job for parallel workers (OpenCV thread/RNG configuration is global).
     """
     config_path, out = Path(config_path).resolve(), Path(out).resolve()
     if out.exists():
@@ -1001,6 +1335,9 @@ def run_job(config_path: Path | str, out: Path | str, *, mode: str | None = None
     stage = Path(tempfile.mkdtemp(prefix=".work-", dir=out))
     published: list[Path] = []
     current = None
+    groups: list[Group] = []
+    config: dict[str, Any] = {}
+    images: dict[str, np.ndarray] = {}
     try:
         boolean(no_balance, "no_balance")
         cv2.setNumThreads(1)
@@ -1047,10 +1384,24 @@ def run_job(config_path: Path | str, out: Path | str, *, mode: str | None = None
                     "view_box_xyxy_exclusive": r["view_box_xyxy_exclusive"],
                 }
             write_json(stage / "containers" / tile.report["key"] / "report.json", tile.report)
+            group = next(g for g in groups if g.config["key"] == tile.report["key"])
+            if tile.diagnostics is not None:
+                render_debug_overlay(
+                    [(images[r.source], r.box) for r in group.regions],
+                    tile.diagnostics, tile.image,
+                    stage / "containers" / tile.report["key"] / "debug_overlay.png")
+                write_json(stage / "containers" / tile.report["key"] / "diagnostics.json",
+                           tile.diagnostics.to_payload())
             if horizontal_layout:
                 x += w + gap
             else:
                 y += h + gap
+        first_diag = next((t for t in tiles if t.diagnostics is not None), None)
+        if first_diag is not None:
+            shutil.copyfile(stage / "containers" / first_diag.report["key"] / "debug_overlay.png",
+                            stage / "debug_overlay.png")
+            shutil.copyfile(stage / "containers" / first_diag.report["key"] / "diagnostics.json",
+                            stage / "diagnostics.json")
         save_image(stage / "result.png", canvas)
         save_image(stage / "geometry_only.png", geometry)
         save_image(stage / "source_map_16bit.png", source_map)
@@ -1136,6 +1487,40 @@ def run_job(config_path: Path | str, out: Path | str, *, mode: str | None = None
         rejection = {"status": "rejected", "program_version": VERSION, "reason": str(exc),
                      "container_key": current, "details": details, "result_created": False,
                      "fallback_to_edge": False}
+        diag_files: list[str] = []
+        # Rejection overlay: same geometry the engine saw, with the exact reason.
+        group_in_flight = next((g for g in groups if g.config["key"] == current), None) \
+            if current and groups else None
+        if group_in_flight is not None:
+            try:
+                stats = details if isinstance(details, dict) else {}
+                regions = group_in_flight.regions
+                rejected_diag = StitchDiagnostics(
+                    method=group_in_flight.config.get("method", "unknown"),
+                    status="rejected", quality_state="rejected",
+                    direction=config["direction"] if isinstance(config, dict) else "horizontal",
+                    source_size_wh=[[r.image.shape[1], r.image.shape[0]] for r in regions],
+                    detected_corners=[(r.quad + np.float32(r.box[:2])).tolist() for r in regions],
+                    rejection_reason=str(exc),
+                    matches_total=stats.get("mutual_unique_candidates"),
+                    inliers=stats.get("inliers"), inlier_ratio=stats.get("inlier_ratio"),
+                    match_points_first=stats.get("match_points_first"),
+                    match_points_second=stats.get("match_points_second"),
+                    inlier_mask=stats.get("inlier_mask"),
+                    homography_second_to_first=(stats.get("homography_second_view_to_first_view")
+                                                or stats.get("homography_second_matching_to_first_matching")),
+                    sanity={"geometric_checks_passed": False,
+                            "failing_stage": "validation"})
+                diag_dir = out / "containers" / current
+                render_debug_overlay([(images[r.source], r.box) for r in regions],
+                                     rejected_diag, None, diag_dir / "debug_overlay.png")
+                write_json(diag_dir / "diagnostics.json", rejected_diag.to_payload())
+                rejection["diagnostics_files"] = [
+                    f"containers/{current}/debug_overlay.png", f"containers/{current}/diagnostics.json"]
+                shutil.copyfile(diag_dir / "debug_overlay.png", out / "debug_overlay.png")
+                shutil.copyfile(diag_dir / "diagnostics.json", out / "diagnostics.json")
+            except Exception:
+                pass  # diagnostics must never mask the original rejection
         try:
             write_json(out / "report.json", rejection)
         except OSError:
