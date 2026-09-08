@@ -1,0 +1,11 @@
+# Gitleaks configuration: default rule set plus a custom rule for the
+# proxy-style API keys (sk-…) used by OpenAI-compatible endpoints.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "proxy-api-key"
+description = "OpenAI-compatible proxy API key"
+regex = '''sk-[A-Za-z0-9_-]{16,}'''
+tags = ["key", "API"]
+keywords = ["sk-"]

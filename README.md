@@ -114,6 +114,22 @@ tests/                  80 unit/regression tests + synthetic fixtures
 validation/             Packaging and run-validation logs
 ```
 
+## Keeping this repository clean
+
+The original photographs and any private endpoint credentials live only in a
+separate private workspace. Publishing is guarded at three layers:
+
+1. **One-command sync** — a private-side script copies the workspace in with the
+   sample bundle, previews and AI credentials excluded, blanks the seeded API
+   defaults, and runs the test suite before you review the diff.
+2. **Local pre-push hook** — `.githooks/pre-push` rejects any push whose commits
+   add banned paths (`sources/`, `examples/`, previews, runtime dirs), secret-shaped
+   strings (`sk-…`), or patterns listed in the untracked
+   `.githooks/local-banned.txt` (machine-local regexes, e.g. a private endpoint).
+   Enable once per clone: `git config core.hooksPath .githooks`.
+3. **CI** — `.github/workflows/security.yml` runs Gitleaks over the full history
+   plus an explicit check that no private-asset paths or `sk-…` keys are tracked.
+
 ## Status
 
 Development preview. The engine is conservative by design: it refuses to guess

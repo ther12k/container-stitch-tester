@@ -4,3 +4,4 @@ web_jobs/
 web_uploads/
 *.pyc
 .work-*/
+.githooks/local-banned.txt

@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# pre-push guard for the public container-stitch-tester repo.
+#
+# Blocks a push when the commits being pushed:
+#   - add/modify banned paths (private sample bundle, runtime dirs, venv), or
+#   - introduce secret-shaped strings (generic sk-… API keys), or
+#   - match any extra regex listed in .githooks/local-banned.txt (untracked,
+#     machine-local — e.g. a private endpoint URL that must not be published).
+#
+# Enable once per clone:  git config core.hooksPath .githooks
+set -uo pipefail
+
+ZERO=0000000000000000000000000000000000000000
+EMPTY_TREE=$(git hash-object -t tree /dev/null)
+BANNED_PATHS='^(sources|examples)/(\S|$)|(^|/)preview_all\.jpg$|(^|/)gallery\.html$|(^|/)sample_gallery\.html$|(^|/)\.venv/|(^|/)web_jobs/|(^|/)web_uploads/'
+SECRET_RE='sk-[A-Za-z0-9_-]{10,}'
+
+ROOT=$(git rev-parse --show-toplevel)
+LOCAL_BANNED="$ROOT/.githooks/local-banned.txt"
+EXTRA_RE=()
+if [[ -f "$LOCAL_BANNED" ]]; then
+  while IFS= read -r line; do
+    [[ -z "$line" || "$line" =~ ^# ]] && continue
+    EXTRA_RE+=("$line")
+  done < "$LOCAL_BANNED"
+fi
+
+blocked=0
+report() { echo "pre-push: BLOCKED — $1" >&2; blocked=1; }
+
+scan_commit() {  # $1 = commit to scan (content of changed files at that tip)
+  local sha=$1 base=$2 f blob
+  while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    if [[ "$f" =~ $BANNED_PATHS ]]; then
+      report "banned path '$f'"
+      continue
+    fi
+    blob=$(git show "$sha:$f" 2>/dev/null) || continue
+    if grep -Eq "$SECRET_RE" <<<"$blob"; then
+      report "secret-shaped string (matches $SECRET_RE) in '$f'"
+    fi
+    local re
+    for re in "${EXTRA_RE[@]:-}"; do
+      [[ -z "$re" ]] && continue
+      if grep -Eq "$re" <<<"$blob"; then
+        report "'$f' matches locally-banned pattern '$re'"
+      fi
+    done
+  done < <(git diff --name-only "$base" "$sha")
+}
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [[ "$local_sha" == "$ZERO" ]] && continue            # branch deletion
+  base="$remote_sha"; [[ "$base" == "$ZERO" ]] && base="$EMPTY_TREE"
+  scan_commit "$local_sha" "$base"
+done
+
+if (( blocked )); then
+  echo "" >&2
+  echo "This push would publish private material. Remove the offending files/strings," >&2
+  echo "re-run scripts/sync_public.py if syncing from the private workspace, and try again." >&2
+  exit 1
+fi
+exit 0
