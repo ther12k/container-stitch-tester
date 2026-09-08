@@ -42,6 +42,13 @@ image ──► AI vision planner (optional)  ──► ai_plan (normalized JSON
   sent back with diagnostics for a capped number of retries. If the reviewer is
   unreachable the planner takes over automatically without consuming an attempt.
   **The engine's validation is final — the AI cannot override a rejection.**
+- **Fixed-camera profiles**: calibrate corners once per camera mount
+  (`profiles/*.json`); every capture from that camera then generates a validated
+  config. Frame dimensions must match the calibration exactly, and an optional
+  pinned reference hash refuses a different physical frame.
+- **metrics.json** on every run (success and rejection): a descriptive
+  per-container scorecard — inliers, ratios, reprojection error, sanity checks —
+  mirroring engine decisions without adding new quality logic.
 - **Debug overlay** (`debug_overlay.png` + `diagnostics.json` per job): one sheet
   answers "why did this stitch pass or fail?" — configured corners, feature matches
   (inliers vs rejected), projected quads, overlap polygon, seam + feather band,

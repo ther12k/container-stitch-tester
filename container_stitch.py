@@ -1317,6 +1317,43 @@ def process_group(group: Group, cross_size: int, out: Path, no_balance: bool,
     return Tile(image, geometry, provenance, report, diag_obj)
 
 
+def summarize_metrics(report: dict[str, Any]) -> dict[str, Any]:
+    """Descriptive scorecard over a run: aggregates engine-made decisions.
+
+    Adds no new quality logic — verdict mirrors the report's own status /
+    quality_state; container numbers come from StitchDiagnostics / matching
+    stats unchanged.
+    """
+    containers = []
+    for c in report.get("containers") or []:
+        d = c.get("diagnostics") or {}
+        m = c.get("matching") or {}
+        containers.append({
+            "key": c.get("key"), "method": c.get("method"),
+            "quality_state": d.get("quality_state") or c.get("status", "unknown"),
+            "matches": d.get("matches_total", m.get("mutual_unique_candidates")),
+            "inliers": d.get("inliers", m.get("inliers")),
+            "inlier_ratio": d.get("inlier_ratio", m.get("inlier_ratio")),
+            "median_reprojection_error_px": d.get("median_reprojection_error_px",
+                                                  m.get("median_reprojection_error_px")),
+            "overlap_ratio": d.get("overlap_ratio", m.get("overlap_fraction_of_smaller_warp")),
+            "sanity_checks": d.get("sanity_checks") or {},
+            "warnings": c.get("warnings") or [],
+        })
+    if report.get("status") == "rejected":
+        verdict = "rejected"
+    else:
+        verdict = report.get("quality_state", "requires_review")
+    return {
+        "schema_version": 1, "job_verdict": verdict,
+        "quality_state": report.get("quality_state") or report.get("status"),
+        "rejection_reason": report.get("reason"),
+        "container_count": len(containers),
+        "containers": containers,
+        "note": "Descriptive aggregation of engine decisions; adds no new quality logic.",
+    }
+
+
 def run_job(config_path: Path | str, out: Path | str, *, mode: str | None = None,
             input_path: Path | str | None = None, source_overrides: dict[str, Path] | None = None,
             no_balance: bool = False, direction: str | None = None) -> dict[str, Any]:
@@ -1468,6 +1505,7 @@ def run_job(config_path: Path | str, out: Path | str, *, mode: str | None = None
                               "learned super-resolution", "automatic container detection", "cross-container matching"],
             "no_balance_override": bool(no_balance),
         }
+        write_json(stage / "metrics.json", summarize_metrics(report))
         # Publish only after EVERY container succeeds. report.json commits last.
         for path in list(stage.iterdir()):
             target = out / path.name
@@ -1521,6 +1559,10 @@ def run_job(config_path: Path | str, out: Path | str, *, mode: str | None = None
                 shutil.copyfile(diag_dir / "diagnostics.json", out / "diagnostics.json")
             except Exception:
                 pass  # diagnostics must never mask the original rejection
+        try:
+            write_json(out / "metrics.json", summarize_metrics(rejection))
+        except OSError:
+            pass
         try:
             write_json(out / "report.json", rejection)
         except OSError:

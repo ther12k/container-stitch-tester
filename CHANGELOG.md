@@ -1,9 +1,3 @@
-# v2.2.0-diagnostics
-
-- Engine-level StitchDiagnostics + deterministic debug overlay (debug_overlay.png, diagnostics.json) for pass, weak-match, and rejection cases; exact rejection reason rendered on the image.
-- Rejected jobs now leave diagnostics-only artifacts in addition to report.json; no composites are published.
-- 85 tests (5 new diagnostic fixtures: clean pass, weak-match warning, wrong-container rejection, degenerate homography, minimal render).
-
 # v2.1.0
 
 - One program for horizontal/vertical, single/combo processing.

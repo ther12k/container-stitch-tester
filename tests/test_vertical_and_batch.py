@@ -94,7 +94,7 @@ class VerticalTests(unittest.TestCase):
         if contains:
             self.assertIn(contains, str(exc.exception))
         self.assertEqual({p.name for p in out.iterdir()}
-                         - {'debug_overlay.png', 'diagnostics.json', 'containers'},
+                         - {'debug_overlay.png', 'diagnostics.json', 'metrics.json', 'containers'},
                          {'report.json'})
         r = json.loads((out/'report.json').read_text())
         self.assertFalse(r['result_created'])
@@ -307,7 +307,7 @@ class VerticalTests(unittest.TestCase):
         self.assertFalse((out/'bad/result.png').exists())
         self.assertTrue((out/'batch_report.json').is_file())
         self.assertEqual({p.name for p in (out/'bad').iterdir()}
-                         - {'debug_overlay.png', 'diagnostics.json', 'containers'},
+                         - {'debug_overlay.png', 'diagnostics.json', 'metrics.json', 'containers'},
                          {'report.json'})
 
     def test_29_duplicate_batch_key_rejected_before_output_claim(self):

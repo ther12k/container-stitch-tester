@@ -84,7 +84,7 @@ class UnifiedTests(unittest.TestCase):
             cs.run_job(cpath,out,**kwargs)
         if text:self.assertIn(text,str(ctx.exception))
         self.assertEqual({p.name for p in out.iterdir()}
-                         - {'debug_overlay.png', 'diagnostics.json', 'containers'},
+                         - {'debug_overlay.png', 'diagnostics.json', 'metrics.json', 'containers'},
                          {'report.json'})
         r=json.loads((out/'report.json').read_text())
         self.assertEqual(r['status'],'rejected')

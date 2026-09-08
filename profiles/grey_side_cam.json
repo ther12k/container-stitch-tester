@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "profile_key": "grey_side_cam",
+  "camera": {
+    "label": "Grey side camera (calibrated on single_grey frame)",
+    "expected_size_wh": [
+      2048,
+      486
+    ]
+  },
+  "pin": {
+    "reference_sha256": "9d719b3ea509c48e5e35f77d93de0755c4855db41e39cf617b0d29ba7ceea5f2",
+    "enforce": false
+  },
+  "job_defaults": {
+    "mode": "single",
+    "direction": "horizontal",
+    "cross_size_px": 256,
+    "gap_px": 12
+  },
+  "containers": [
+    {
+      "key": "grey",
+      "label": "Grey container side",
+      "method": "edge",
+      "exposure": {
+        "enabled": true,
+        "sample_width": 64,
+        "exclude_seam_px": 6,
+        "sample_y_fraction": [
+          0.12,
+          0.87
+        ],
+        "fade_px": 160,
+        "max_gain": 1.6
+      },
+      "regions": [
+        {
+          "quad": [
+            [
+              656,
+              33
+            ],
+            [
+              1023,
+              44
+            ],
+            [
+              1023,
+              283
+            ],
+            [
+              656,
+              286
+            ]
+          ],
+          "feature_quad": [
+            [
+              668,
+              52
+            ],
+            [
+              1023,
+              52
+            ],
+            [
+              1023,
+              264
+            ],
+            [
+              668,
+              264
+            ]
+          ],
+          "notes": ""
+        },
+        {
+          "quad": [
+            [
+              1024,
+              27
+            ],
+            [
+              1337,
+              24
+            ],
+            [
+              1337,
+              278
+            ],
+            [
+              1024,
+              274
+            ]
+          ],
+          "feature_quad": [
+            [
+              1024,
+              43
+            ],
+            [
+              1322,
+              39
+            ],
+            [
+              1322,
+              250
+            ],
+            [
+              1024,
+              250
+            ]
+          ],
+          "notes": ""
+        }
+      ],
+      "notes": "Reviewed calibration carried over from configs/single_grey.json."
+    }
+  ],
+  "notes": "Example fixed-camera profile. Quads are absolute image-space; pin not enforced."
+}

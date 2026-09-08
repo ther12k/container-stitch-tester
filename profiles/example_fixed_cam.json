@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "profile_key": "example_fixed_cam",
+  "camera": {
+    "label": "Example fixed camera (2048x512)",
+    "expected_size_wh": [
+      2048,
+      512
+    ]
+  },
+  "job_defaults": {
+    "mode": "single",
+    "direction": "horizontal",
+    "cross_size_px": 320,
+    "gap_px": 12
+  },
+  "containers": [
+    {
+      "key": "container_1",
+      "method": "edge",
+      "regions": [
+        {
+          "quad": [
+            [
+              20,
+              40
+            ],
+            [
+              1010,
+              30
+            ],
+            [
+              1015,
+              470
+            ],
+            [
+              25,
+              480
+            ]
+          ],
+          "notes": "left half of the target container"
+        },
+        {
+          "quad": [
+            [
+              1030,
+              35
+            ],
+            [
+              2020,
+              28
+            ],
+            [
+              2025,
+              465
+            ],
+            [
+              1040,
+              475
+            ]
+          ],
+          "notes": "right half of the target container"
+        }
+      ],
+      "notes": "Replace the quads with your own reviewed calibration for your camera."
+    }
+  ],
+  "notes": "Template fixed-camera profile. Calibrate the quads once for your fixed mount, then every capture from that camera generates a validated config."
+}

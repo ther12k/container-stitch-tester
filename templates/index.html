@@ -223,6 +223,16 @@
               <span class="text-[9px] text-mute">Select, drop, or paste (Ctrl+V / ⌘V) anywhere</span>
             </div>
 
+            <!-- Fixed-camera profile -->
+            <div class="flex items-center justify-between rounded-xl border border-line bg-soft/60 px-3 py-2 gap-2">
+              <div class="flex items-center gap-2 min-w-0 grow">
+                <span class="text-xs font-semibold shrink-0">📷 Camera profile</span>
+                <select id="profile-select" class="input-field input-sm !py-1 min-w-0"></select>
+              </div>
+              <button type="button" onclick="applyProfile()" id="profile-apply"
+                      class="btn-secondary !py-1 !px-2.5 text-[11px] shrink-0">Generate config</button>
+            </div>
+
             <!-- AI planning toggle -->
             <div class="flex items-center justify-between rounded-xl border border-violet-200 bg-violet-50/50 px-3 py-2">
               <label class="check-row text-xs font-semibold text-violet-900">
@@ -763,6 +773,68 @@ function copyJson() {
   if (raw) navigator.clipboard.writeText(raw);
 }
 window.copyReportJson = null; /* replaced by each result partial */
+
+/* ═══════════ Camera profiles ═══════════ */
+async function loadProfiles() {
+  const sel = document.getElementById('profile-select');
+  try {
+    const res = await fetch('/api/profiles');
+    const items = await res.json();
+    if (!items.length) {
+      sel.innerHTML = '<option value="">(no profiles in profiles/)</option>';
+      return;
+    }
+    sel.innerHTML = items.map(p =>
+      `<option value="${p.file}">${p.label} · ${p.expected_size_wh ? p.expected_size_wh.join('×') : '?'}${p.pinned ? ' · pinned' : ''}</option>`).join('');
+  } catch (_) {
+    sel.innerHTML = '<option value="">(profiles unavailable)</option>';
+  }
+}
+
+async function applyProfile() {
+  const key = document.getElementById('profile-select').value;
+  if (!key) return;
+  const file = document.getElementById('sources-editor').files[0];
+  if (!file) {
+    const t = document.getElementById('paste-toast');
+    t.textContent = '⚠ Stage a capture from this camera first';
+    showToast();
+    return;
+  }
+  const btn = document.getElementById('profile-apply');
+  btn.disabled = true; btn.textContent = 'Generating…';
+  logLine('run', `generating config from camera profile '${key}' for the staged capture…`);
+  try {
+    const fd = new FormData();
+    fd.append('profile', key);
+    fd.append('image', file, file.name);
+    const res = await fetch('/profile-config', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok) {
+      logLine('error', `profile rejected the capture: ${data.error}`);
+      const t = document.getElementById('paste-toast');
+      t.textContent = `⚠ ${String(data.error).slice(0, 90)}`;
+      showToast();
+      return;
+    }
+    document.getElementById('config-textarea').value = data.config;
+    toggleConfigInputIfNeeded(false);
+    logLine('ok', 'profile config generated — review the corners in the editor, then Run');
+  } catch (err) {
+    logLine('error', `profile request failed: ${err.message}`);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Generate config';
+  }
+}
+function toggleConfigInputIfNeeded(showTextarea) {
+  const tw = document.getElementById('config-textarea-wrap');
+  const fw = document.getElementById('config-file-wrap');
+  if (showTextarea && tw.classList.contains('hidden')) {
+    tw.classList.remove('hidden'); fw.classList.add('hidden');
+    document.getElementById('btn-use-file').textContent = 'Upload file instead';
+  }
+}
+loadProfiles();
 
 /* ═══════════ AI planning ═══════════ */
 const AI_STORE = 'cst-ai-settings';

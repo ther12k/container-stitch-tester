@@ -16,6 +16,7 @@ from flask import Flask, Response, abort, render_template, request, send_file, u
 
 from container_stitch import ProcessingError, VERSION, run_batch, run_job
 import ai_planner
+import camera_profiles
 
 BASE_DIR = Path(__file__).resolve().parent
 JOBS_DIR = BASE_DIR / "web_jobs"
@@ -681,6 +682,55 @@ def create_app() -> Flask:
         if not thumb.is_file():
             abort(404)
         return send_file(thumb, mimetype="image/png")
+
+    @app.get("/api/profiles")
+    def api_profiles() -> Response:
+        profiles_dir = BASE_DIR / "profiles"
+        items = []
+        if profiles_dir.is_dir():
+            for path in sorted(profiles_dir.glob("*.json")):
+                try:
+                    data = camera_profiles.load_profile(path)
+                    items.append({
+                        "key": data["profile_key"],
+                        "file": path.stem,
+                        "label": data.get("camera", {}).get("label", data["profile_key"]),
+                        "expected_size_wh": data.get("camera", {}).get("expected_size_wh"),
+                        "pinned": bool(data.get("pin", {}).get("enforce")),
+                    })
+                except Exception:
+                    continue
+        return Response(json.dumps(items), mimetype="application/json")
+
+    @app.post("/profile-config")
+    def profile_config() -> Response:
+        """Generate an engine config from a camera profile + the staged capture."""
+        key = request.form.get("profile", "")
+        image = request.files.get("image")
+        profiles_dir = BASE_DIR / "profiles"
+        path = profiles_dir / f"{key}.json"
+        if not path.is_file():
+            return Response(json.dumps({"error": f"Unknown profile: {key}"}), status=404,
+                            mimetype="application/json")
+        if image is None or not image.filename:
+            return Response(json.dumps({"error": "Stage a capture image first."}), status=400,
+                            mimetype="application/json")
+        work = UPLOADS_DIR / make_job_id("profile")
+        work.mkdir(parents=True, exist_ok=True)
+        capture = work / "capture.png"
+        image.save(capture)
+        try:
+            profile = camera_profiles.load_profile(path)
+            config = camera_profiles.profile_to_config(profile, capture)
+        except (ProcessingError, Exception) as exc:
+            return Response(json.dumps({"error": str(exc)}), status=422,
+                            mimetype="application/json")
+        # keep the staged capture reachable for the subsequent run
+        target = work / "input.png"
+        shutil.copyfile(capture, target)
+        config["sources"][next(iter(config["sources"]))]["path"] = str(target)
+        return Response(json.dumps({"config": json.dumps(config, indent=2)}, indent=None),
+                        mimetype="application/json")
 
     @app.get("/api/docs/<name>")
     def api_docs(name: str) -> Response:
