@@ -8,10 +8,13 @@
       Planner <b class="text-ink">{{ ai_meta.planner }}</b>
       {% if ai_meta.reviewer %} · Reviewer <b class="text-ink">{{ ai_meta.reviewer }}</b>{% endif %}
       · Attempts <b class="text-ink">{{ ai_meta.attempt_count }}/{{ ai_meta.max_attempts }}</b>
-      {% if conf %} · Confidence: dir {{ '%.2f' % (conf.get('direction', 0)) }} / grouping {{ '%.2f' % (conf.get('container_grouping', 0)) }} / same-surface {{ '%.2f' % (conf.get('same_surface', 0)) }}{% endif %}
+      {% if conf %} · Planner confidence: dir {{ '%.2f' % (conf.get('direction', 0)) }} / grouping {{ '%.2f' % (conf.get('container_grouping', 0)) }} / same-surface {{ '%.2f' % (conf.get('same_surface', 0)) }}{% endif %}
       {% if ai_meta.no_balance %} · exposure balancing off{% endif %}
     </span>
   </div>
+  {% if conf %}
+    <p class="text-[10px] text-mute -mt-1">Confidence values are what the planner asserted about its own proposal — the engine's validation is the verdict below, not these numbers.</p>
+  {% endif %}
   {% if ai_meta.reason %}
     <p class="text-[10px] text-mute -mt-1 mb-2">AI reason: <i>{{ ai_meta.reason }}</i>
       {% if ai_meta.exclude %} · Excluded: {{ ai_meta.exclude | join('; ') }}{% endif %}
@@ -45,6 +48,10 @@
         <p class="text-[10px] text-mute">No attempts completed — check the AI settings and endpoint.</p>
       {% endfor %}
     </div>
+    {% if log_url %}
+      <p class="text-[10px] text-mute mt-2">Full provider responses (including raw error bodies) were kept server-side:
+        <a href="{{ log_url }}" target="_blank" class="text-blue-600 hover:underline">ai_run_log.json</a></p>
+    {% endif %}
   {% endif %}
 
   <!-- Attempts log (both success and failure) -->

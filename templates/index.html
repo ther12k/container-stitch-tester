@@ -172,8 +172,10 @@
             {% endfor %}
           </div>
 
-          <form id="example-form" hx-post="/run-example" hx-target="#result" hx-indicator="#spinner"
-                hx-disabled-elt="find button[type='submit']" class="space-y-2.5">
+          <!-- No hx-post here: the submit interceptor routes every run through
+               the SSE console stream (streamRun). A second htmx path would
+               fire the job twice. -->
+          <form id="example-form" class="space-y-2.5">
             <input type="hidden" name="recipe" id="recipe-hidden" value="single_grey">
             <label class="check-row text-xs">
               <input type="checkbox" name="no_balance" class="checkbox">
@@ -202,9 +204,8 @@
             </div>
           </div>
 
-          <form hx-post="/run-custom" hx-target="#result" hx-indicator="#spinner"
-                enctype="multipart/form-data" hx-disabled-elt="find button[type='submit']"
-                class="space-y-2.5">
+          <!-- No hx-post: same single-path rule as the example form. -->
+          <form class="space-y-2.5">
             <div id="config-textarea-wrap">
               <textarea name="config_text" id="config-textarea" rows="8" spellcheck="false"
                         class="codeblock w-full resize-y font-mono text-[10px] leading-relaxed">{{ default_config }}</textarea>
@@ -428,8 +429,14 @@
               <option>2</option><option selected>3</option><option>4</option>
             </select>
           </label>
-          <p class="text-[10px] text-mute leading-snug">AI proposes — OpenCV proves. The deterministic engine validates every plan and may reject it; rejected plans are sent back with diagnostics up to this many attempts.</p>
+          <label class="text-xs text-mute font-medium">Request timeout
+            <select id="ai-timeout" class="input-field input-sm mt-0.5 w-28">
+              <option value="45">45 s</option><option value="90" selected>90 s</option>
+              <option value="120">120 s</option><option value="180">180 s</option>
+            </select>
+          </label>
         </div>
+        <p class="text-[10px] text-mute leading-snug">AI proposes — OpenCV proves. The deterministic engine validates every plan and may reject it; rejected plans are sent back with diagnostics up to this many attempts. A provider that fails twice in a row (timeout or 5xx) is skipped for the rest of the run instead of being retried immediately.</p>
         <p class="text-[10px] text-mute leading-snug border-t border-line pt-3">
           🔒 Keys stay in your browser (localStorage) and are sent only with each run to this local server,
           which calls your configured endpoints directly. The AI never edits pixels — it only proposes
@@ -803,7 +810,7 @@ async function applyProfile() {
   }
   const btn = document.getElementById('profile-apply');
   btn.disabled = true; btn.textContent = 'Generating…';
-  logLine('run', `generating config from camera profile '${key}' for the staged capture…`);
+  logLine('run', 'run', `generating config from camera profile '${key}' for the staged capture…`);
   try {
     const fd = new FormData();
     fd.append('profile', key);
@@ -811,7 +818,7 @@ async function applyProfile() {
     const res = await fetch('/profile-config', { method: 'POST', body: fd });
     const data = await res.json();
     if (!res.ok) {
-      logLine('error', `profile rejected the capture: ${data.error}`);
+      logLine('error', 'error', `profile rejected the capture: ${data.error}`);
       const t = document.getElementById('paste-toast');
       t.textContent = `⚠ ${String(data.error).slice(0, 90)}`;
       showToast();
@@ -819,9 +826,9 @@ async function applyProfile() {
     }
     document.getElementById('config-textarea').value = data.config;
     toggleConfigInputIfNeeded(false);
-    logLine('ok', 'profile config generated — review the corners in the editor, then Run');
+    logLine('ok', 'ok', 'profile config generated — review the corners in the editor, then Run');
   } catch (err) {
-    logLine('error', `profile request failed: ${err.message}`);
+    logLine('error', 'error', `profile request failed: ${err.message}`);
   } finally {
     btn.disabled = false; btn.textContent = 'Generate config';
   }
@@ -846,6 +853,7 @@ const AI_DEFAULTS = {
   planner: { base_url: '', api_key: '', model: '' },
   reviewer: { base_url: '', api_key: '', model: '' },
   max_attempts: 3,
+  request_timeout: 90,
 };
 function loadAiSettings() {
   let stored = {};
@@ -854,6 +862,7 @@ function loadAiSettings() {
     planner: { ...AI_DEFAULTS.planner, ...(stored.planner || {}) },
     reviewer: { ...AI_DEFAULTS.reviewer, ...(stored.reviewer || {}) },
     max_attempts: stored.max_attempts || AI_DEFAULTS.max_attempts,
+    request_timeout: stored.request_timeout || AI_DEFAULTS.request_timeout,
   };
 }
 function saveAiSettings() {
@@ -861,6 +870,7 @@ function saveAiSettings() {
     planner: { base_url: val('ai-p-base'), api_key: val('ai-p-key'), model: val('ai-p-model') },
     reviewer: { base_url: val('ai-r-base'), api_key: val('ai-r-key'), model: val('ai-r-model') },
     max_attempts: parseInt(document.getElementById('ai-max-attempts').value) || 3,
+    request_timeout: parseInt(document.getElementById('ai-timeout').value) || 90,
   };
   localStorage.setItem(AI_STORE, JSON.stringify(s));
   refreshAiUi();
@@ -875,6 +885,7 @@ function openAiModal() {
   document.getElementById('ai-r-key').value = s.reviewer?.api_key || '';
   document.getElementById('ai-r-model').value = s.reviewer?.model || '';
   document.getElementById('ai-max-attempts').value = s.max_attempts || 3;
+  document.getElementById('ai-timeout').value = String(s.request_timeout || 90);
   const m = document.getElementById('ai-modal');
   m.classList.remove('hidden'); m.classList.add('flex');
 }
@@ -938,6 +949,7 @@ document.querySelector('#panel-json form').addEventListener('submit', function (
 const CONSOLE_LEVELS = { info: 'text-slate-400', run: 'text-sky-400', ok: 'text-emerald-400',
                          warn: 'text-amber-400', error: 'text-red-400', start: 'text-violet-400' };
 function logLine(stage, level, message) {
+  if (message === undefined) { message = level; level = 'info'; }  // tolerate 2-arg calls
   const box = document.getElementById('console');
   if (box.dataset.clean !== '1') { box.innerHTML = ''; box.dataset.clean = '1'; }
   const time = new Date().toTimeString().slice(0, 8);
@@ -1006,11 +1018,16 @@ async function streamRun(kind, fd) {
 /* Intercept both run forms — every UI run now goes through the console stream */
 document.getElementById('example-form').addEventListener('submit', function (e) {
   e.preventDefault(); e.stopImmediatePropagation();
-  streamRun('example', new FormData(this));
+  const btn = this.querySelector('button[type="submit"]');
+  if (btn.disabled) return;
+  btn.disabled = true;
+  streamRun('example', new FormData(this)).finally(() => { btn.disabled = false; });
 }, true);
 
 document.querySelector('#panel-json form').addEventListener('submit', function (e) {
   e.preventDefault(); e.stopImmediatePropagation();
+  const btn = this.querySelector('button[type="submit"]');
+  if (btn.disabled) return;
   const aiOn = document.getElementById('ai-toggle').checked;
   if (aiOn) {
     const st = loadAiSettings();
@@ -1021,8 +1038,23 @@ document.querySelector('#panel-json form').addEventListener('submit', function (
       showToast();
       return;
     }
+  } else {
+    // Fail fast in the browser: empty or syntactically invalid JSON never
+    // reaches the server, and the editor keeps whatever the user typed.
+    const usesFile = !document.getElementById('config-textarea-wrap').classList.contains('hidden');
+    if (usesFile) {
+      try { JSON.parse(document.getElementById('config-textarea').value); }
+      catch (err) {
+        const t = document.getElementById('paste-toast');
+        t.textContent = `⚠ Config JSON is not valid — ${err.message}`;
+        showToast();
+        logLine('error', 'error', `config JSON is not valid: ${err.message} — fix the editor, then run again`);
+        return;
+      }
+    }
   }
-  streamRun(aiOn ? 'ai' : 'custom', new FormData(this));
+  btn.disabled = true;
+  streamRun(aiOn ? 'ai' : 'custom', new FormData(this)).finally(() => { btn.disabled = false; });
 }, true);
 
 /* ═══════════ Docs modal ═══════════ */

@@ -91,14 +91,34 @@ def build_messages(data_uri: str, attempt_log: list[dict[str, Any]]) -> list[dic
             {"role": "user", "content": content}]
 
 
+_TAG_RE = re.compile(r"<[^>]+>")
+_WS_RE = re.compile(r"\s+")
+
+
+def sanitize_detail(text: str, limit: int = 160) -> str:
+    """Strip HTML tags and collapse whitespace from a provider error body.
+
+    Proxies answer outages with whole nginx HTML pages; those never belong in
+    the UI or the console. The untruncated raw body stays available to callers
+    via ``AiProviderUnavailable.raw_detail`` for server-side artifacts.
+    """
+    cleaned = _WS_RE.sub(" ", _TAG_RE.sub(" ", str(text or ""))).strip()
+    return cleaned[:limit]
+
+
 class AiProviderUnavailable(RuntimeError):
     """The endpoint could not be reached or is not usable (down, auth, wrong shape).
 
     Distinct from a bad model reply: availability failures let the run fall
     back to another provider without consuming a retry attempt, while a bad
     reply (e.g. the model returning prose instead of JSON) counts as a real
-    failed attempt.
+    failed attempt. ``raw_detail`` keeps the unsanitized provider response so
+    the app can persist it server-side without showing it in the UI.
     """
+
+    def __init__(self, message: str, raw_detail: str = ""):
+        super().__init__(message)
+        self.raw_detail = raw_detail
 
 
 def chat_completion(base_url: str, api_key: str, model: str,
@@ -122,10 +142,14 @@ def chat_completion(base_url: str, api_key: str, model: str,
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", "replace")[:300]
-        raise AiProviderUnavailable(f"{model} HTTP {exc.code}: {detail}") from exc
+        raw_body = exc.read().decode("utf-8", "replace")[:2000]
+        raise AiProviderUnavailable(
+            f"{model} HTTP {exc.code}: {sanitize_detail(raw_body) or 'no response body'}",
+            raw_detail=raw_body) from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise AiProviderUnavailable(f"{model} unreachable: {exc}") from exc
+        reason = str(exc) or repr(exc) or exc.__class__.__name__
+        raise AiProviderUnavailable(f"{model} unreachable: {sanitize_detail(reason, 120)}",
+                                    raw_detail=reason) from exc
 
     if raw.lstrip().startswith("data:"):
         # Server streamed anyway — reassemble the deltas.

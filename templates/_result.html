@@ -127,10 +127,18 @@
           </button>
         {% endif %}
 
+        {% set review_pending = panel.quality_state and panel.quality_state != 'overlap_requires_visual_review' and panel.quality_state != 'rectified_only' %}
+        {% if review_pending %}
+        <div class="banner-warn mt-2 !py-1.5 !px-2.5">
+          <svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01M12 3l9.5 16.5H2.5L12 3z"/></svg>
+          <p class="text-[10px]"><b>Artifact created — needs review.</b> {{ panel.quality_label or 'Not verified' }}: this composite was produced but the engine could not verify it. Inspect the image (and the debug overlay) before using it. {{ message }}</p>
+        </div>
+        {% else %}
         <div class="banner-ok mt-2 !py-1.5 !px-2.5">
           <svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
           <p class="text-[10px]"><b>Processing complete.</b> {{ panel.quality_label or 'Stitched successfully' }}. {{ message }}</p>
         </div>
+        {% endif %}
 
         <!-- Metadata chips -->
         <div class="grid grid-cols-4 gap-1.5 mt-2">

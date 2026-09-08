@@ -41,6 +41,10 @@ image ──► AI vision planner (optional)  ──► ai_plan (normalized JSON
   confidence scores; the backend converts it to an engine config. Rejections are
   sent back with diagnostics for a capped number of retries. If the reviewer is
   unreachable the planner takes over automatically without consuming an attempt.
+  A provider that fails twice in a row (timeout or 5xx) is skipped for the rest
+  of the run, raw provider error pages are sanitized out of the UI (full
+  responses stay in a server-side `ai_run_log.json`), and confidence numbers are
+  labeled as the *planner's* claim — the engine's verdict is separate.
   **The engine's validation is final — the AI cannot override a rejection.**
 - **Fixed-camera profiles**: calibrate corners once per camera mount
   (`profiles/*.json`); every capture from that camera then generates a validated

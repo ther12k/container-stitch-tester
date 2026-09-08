@@ -257,13 +257,27 @@ def create_app() -> Flask:
                 emit("run", f"reading uploaded config {config_file['filename']}…")
                 config_path = work_dir / safe_upload_name(config_file["filename"])
                 shutil.copyfile(config_file["path"], config_path)
+                # Validate the uploaded file before any engine work so a bad
+                # config fails with a readable message instead of a raw
+                # JSONDecodeError from inside the first engine variant.
+                try:
+                    uploaded_text = config_path.read_text(encoding="utf-8")
+                    json.loads(uploaded_text)
+                except UnicodeDecodeError:
+                    emit("error", "uploaded config is not UTF-8 text")
+                    return render_result_error("The uploaded config is not readable text — export it as UTF-8 JSON and try again.")
+                except json.JSONDecodeError as exc:
+                    friendly = describe_config_error(uploaded_text, exc)
+                    emit("error", friendly)
+                    return render_result_error(friendly)
             else:
                 emit("run", "validating config JSON from the editor…")
                 try:
                     json.loads(config_text)
                 except json.JSONDecodeError as exc:
-                    emit("error", f"config JSON is not valid: {exc}")
-                    return render_result_error(f"Config JSON is not valid: {exc}")
+                    friendly = describe_config_error(config_text, exc)
+                    emit("error", friendly)
+                    return render_result_error(friendly)
                 config_path = work_dir / "config.json"
                 config_path.write_text(config_text, encoding="utf-8")
 
@@ -495,18 +509,29 @@ def create_app() -> Flask:
         attempt_log: list[dict] = []
         last_plan = None
         dead_providers: set[str] = set()
+        transient_failures: dict[str, int] = {}
+        try:
+            request_timeout = max(15, min(int(settings.get("request_timeout", 90)), 240))
+        except (TypeError, ValueError):
+            request_timeout = 90
+        planner_key = f"{planner.get('base_url')}|{planner.get('model')}"
+        reviewer_key = f"{reviewer.get('base_url')}|{reviewer.get('model')}" if has_reviewer else None
         attempt = 0
         while attempt < max_attempts:
             attempt += 1
             # Attempt 1 always uses the planner. Retries prefer the reviewer;
             # if the reviewer is unreachable we fall back to the planner for
             # that attempt without consuming it, and skip the reviewer for the
-            # rest of the run.
-            prov, role = ((planner, "planner") if (attempt == 1 or not has_reviewer)
-                          else (reviewer, "reviewer"))
-            prov_key = f"{prov.get('base_url')}|{prov.get('model')}"
-            if role == "reviewer" and prov_key in dead_providers:
-                prov, role = planner, "planner"
+            # rest of the run. A provider that fails twice in a row (timeout,
+            # 5xx) is treated as down for this run instead of being retried
+            # indefinitely.
+            use_reviewer = (attempt > 1 and has_reviewer
+                            and reviewer_key not in dead_providers)
+            prov, role = ((reviewer, "reviewer") if use_reviewer else (planner, "planner"))
+            prov_key = reviewer_key if use_reviewer else planner_key
+            if role == "planner" and planner_key in dead_providers:
+                emit("error", "no reachable AI provider remains — planner and reviewer are both unavailable, stopping early")
+                break
             prov_name = prov.get("model", "model")
             emit("run", f"attempt {attempt}/{max_attempts}: asking {role} {prov_name}…")
 
@@ -514,21 +539,33 @@ def create_app() -> Flask:
             try:
                 content = ai_planner.chat_completion(
                     prov["base_url"], prov.get("api_key", ""), prov["model"],
-                    ai_planner.build_messages(data_uri, attempt_log))
+                    ai_planner.build_messages(data_uri, attempt_log),
+                    timeout=request_timeout)
                 plan = ai_planner.extract_json(content)
                 ai_planner.validate_plan(plan)
             except ai_planner.AiProviderUnavailable as exc:
+                raw = getattr(exc, "raw_detail", "")
                 if role == "reviewer":
                     dead_providers.add(prov_key)
                     attempt_log.append({"attempt": attempt, "provider": prov_name, "stage": "fallback",
                                         "ok": False,
-                                        "detail": f"reviewer unreachable ({str(exc)[:200]}) — falling back to planner {planner.get('model', '')}"})
+                                        "detail": f"reviewer unreachable ({str(exc)[:200]}) — falling back to planner {planner.get('model', '')}",
+                                        "raw_detail": raw[:2000]})
                     emit("warn", f"{prov_name} unreachable — falling back to planner {planner.get('model', '')} (attempt not consumed)")
                     attempt -= 1  # availability failures do not consume an attempt
                     continue
+                transient_failures[prov_key] = transient_failures.get(prov_key, 0) + 1
+                if transient_failures[prov_key] >= 2:
+                    dead_providers.add(prov_key)
                 attempt_log.append({"attempt": attempt, "provider": prov_name, "stage": "planning",
-                                    "ok": False, "detail": f"provider unreachable: {exc}"})
+                                    "ok": False, "detail": f"provider unreachable: {exc}",
+                                    "raw_detail": raw[:2000]})
                 emit("error", f"attempt {attempt}: provider unreachable — {str(exc)[:140]}")
+                # Brief backoff before touching the same endpoint again; it
+                # just failed, so an immediate retry almost always 504s too.
+                if prov_key not in dead_providers:
+                    emit("run", f"waiting 2s before retrying {prov_name}…")
+                    time.sleep(2)
                 continue
             except Exception as exc:
                 attempt_log.append({"attempt": attempt, "provider": prov_name, "stage": "planning",
@@ -602,10 +639,24 @@ def create_app() -> Flask:
             )
 
         emit("error", "all attempts rejected — no composite was produced")
+        # Keep the full raw provider responses (including unsanitized bodies)
+        # in a server-side artifact; the UI only ever shows sanitized details.
+        log_url = None
+        try:
+            log_dir = JOBS_DIR / job_id
+            log_dir.mkdir(parents=True, exist_ok=True)
+            (log_dir / "ai_run_log.json").write_text(
+                json.dumps(attempt_log, indent=2, ensure_ascii=False), encoding="utf-8")
+            log_url = f"/jobs/{job_id}/ai_run_log.json"
+        except OSError:
+            pass
+        write_meta(JOBS_DIR / job_id, "AI plan — all attempts rejected", "job", "ai",
+                   "rejected", started, runtime_ms(t0), no_balance)
         return render_template(
             "_result_ai.html",
             ok=False,
             job_id=job_id,
+            log_url=log_url,
             ai_meta={
                 "planner": planner.get("model", ""),
                 "reviewer": reviewer.get("model", "") if has_reviewer else "",
@@ -758,14 +809,20 @@ def _noop_emit(stage, message):
 
 def _materialize_files(multi_items) -> tuple[dict[str, list[dict]], Path]:
     """Copy uploaded files to a temp dir so worker threads can read them after
-    the request stream is closed. Returns ({name: [{filename, path}]}, tmp_dir)."""
+    the request stream is closed. Returns ({name: [{filename, path}]}, tmp_dir).
+
+    Browsers submit a filename-less placeholder part for every unselected
+    <input type="file">; those are dropped here so handlers never mistake
+    them for real uploads."""
     tmp_root = Path(tempfile.mkdtemp(prefix="run-upload-"))
     files: dict[str, list[dict]] = {}
     for key, fs in multi_items:
+        if not fs.filename:
+            continue
         idx = len(files.get(key, []))
-        dest = tmp_root / f"{idx:02d}_{Path(fs.filename or 'upload').name}"
+        dest = tmp_root / f"{idx:02d}_{Path(fs.filename).name}"
         fs.save(dest)
-        files.setdefault(key, []).append({"filename": fs.filename or dest.name, "path": str(dest)})
+        files.setdefault(key, []).append({"filename": fs.filename, "path": str(dest)})
     return files, tmp_root
 
 
@@ -1050,6 +1107,23 @@ def render_result_error(message: str, job_id: str | None = None) -> str:
 def blank_to_none(value: str | None) -> str | None:
     value = (value or "").strip()
     return value or None
+
+
+def describe_config_error(text: str, exc: json.JSONDecodeError) -> str:
+    """Turn a JSONDecodeError into a user-facing sentence with the offending line.
+
+    The bare ``Expecting value: line 1 column 1`` message reads like an engine
+    bug; this names the problem, the position and shows the line itself.
+    """
+    if not text.strip():
+        return "The configuration is empty — paste or edit the JSON config (or upload a config file), then run again."
+    lines = text.splitlines()
+    line_no = exc.lineno or 1
+    snippet = lines[line_no - 1].strip() if 0 < line_no <= len(lines) else ""
+    msg = f"Config JSON is not valid: line {exc.lineno or '?'}, column {exc.colno or '?'} — {exc.msg}."
+    if snippet:
+        msg += f" Offending line: {snippet[:100]}"
+    return msg
 
 
 def safe_upload_name(name: str) -> str:
