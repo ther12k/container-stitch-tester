@@ -35,6 +35,7 @@ DEFAULT_CONFIG_TEMPLATE = """{
   "mode": "single",
   "height": 320,
   "gap_px": 8,
+  "edge_alignment": "measure",
   "sources": {
     "main": {
       "path": "input.png"
@@ -1026,6 +1027,17 @@ def panel_from_report(report: dict, job_id: str, out_dir: Path, runtime_ms: int,
         "edge": "Edge join + exposure balance",
         "overlap": "OpenCV SIFT + RANSAC blend",
     }.get(method)
+    seam_alignment = next((c.get("seam_alignment") for c in containers
+                           if isinstance(c.get("seam_alignment"), dict)
+                           and c.get("seam_alignment", {}).get("enabled")), None)
+    if seam_alignment is None:
+        seam_alignment = next((c.get("promoted_from_edge", {}).get("seam_alignment")
+                               for c in containers
+                               if isinstance(c.get("promoted_from_edge"), dict)), None)
+    if seam_alignment:
+        panel["seam_alignment"] = seam_alignment
+        panel["promoted_from_edge"] = any(isinstance(c.get("promoted_from_edge"), dict)
+                                          for c in containers)
     return panel
 
 

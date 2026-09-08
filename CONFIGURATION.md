@@ -12,11 +12,37 @@ Use a supplied recipe as the working example. The single-container and combo pat
 | `cross_size_px` | Target height for horizontal, width for vertical; integer 16–4096, default 320 |
 | `layout` | `horizontal` or `vertical`, defaulting to `direction`; independent of within-group alignment |
 | `gap_px` | Transparent separation between groups, integer 1–256; default 12; not physical distance |
+| `edge_alignment` | Seam handling for `edge` joins: `butt` (default — declared corners joined as-is) or `measure` (feature-measured refinement, see below) |
 | `sources` | One to eight named local input images |
 | `containers` | Explicitly ordered physical-container groups |
 | `notes` | Optional human-readable selection/provenance note |
 
 The schema-1 `height` field is a horizontal alias for `cross_size_px`. Do not combine both fields, or use `height` with a vertical direction. Overlap output bounds can be larger than the target cross size because the second view is transformed rather than stretched to fit.
+
+### `edge_alignment: "measure"` — measured seam refinement
+
+Declared quad corners are estimates; an `edge` join normally butts the warped
+strips exactly as declared, so slightly-wrong corners duplicate a band of
+content or leave a vertical step at the seam. With `"edge_alignment": "measure"`
+the engine cross-matches the two warped strips (SIFT + RANSAC similarity,
+deterministic) and:
+
+1. **Promotes to verified overlap** when the strips demonstrably share coverage
+   (measured overlap ≥ ~8% of the strip) — the pair is re-run through the
+   normal `overlap` method with its *unchanged* proof standards (≥ 20 inliers,
+   inlier ratio ≥ 0.35, sanity clamps), just more sensitive feature detection.
+   A passing proof yields the violet `overlap_requires_visual_review` result.
+2. Otherwise applies a **translation-only correction** to the edge join: trims
+   the measured duplicate band and shifts the cross-axis offset, both clamped
+   (overlap ≤ 45% of the second strip, offset ≤ 14% of the cross size, scale
+   0.85–1.15, rotation ≤ 3°). With ≥ 20 inliers spanning the strip the result
+   is upgraded to `edge_join_feature_aligned`; weaker support keeps the amber
+   `unverified_edge_composite` state with the correction disclosed in
+   `seam_alignment` (report + `diagnostics.json`).
+
+The correction is measured from pixels only — the AI planner is never involved,
+and repeated corrugations can still alias a measurement by one period, so the
+seam remains subject to visual review.
 
 A minimal configuration section for a vertical combo is:
 

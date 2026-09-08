@@ -46,6 +46,14 @@ image ──► AI vision planner (optional)  ──► ai_plan (normalized JSON
   responses stay in a server-side `ai_run_log.json`), and confidence numbers are
   labeled as the *planner's* claim — the engine's verdict is separate.
   **The engine's validation is final — the AI cannot override a rejection.**
+- **Measured seam refinement (v2.3, `edge_alignment: "measure"`)**: declared quad corners are
+  estimates, so an `edge` join can duplicate a band of content or leave a vertical step at the seam.
+  With `measure`, the engine cross-matches the two warped strips (SIFT + RANSAC, deterministic):
+  when the strips demonstrably share coverage the pair is first *promoted to the verified overlap
+  method* (same fixed proof standards), and otherwise a clamped translation correction trims the
+  duplicate band and aligns the seam. Every applied correction is disclosed in `seam_alignment`
+  (report + `diagnostics.json`), strong evidence upgrades the quality state, and the AI planner is
+  never involved in the measurement.
 - **Fixed-camera profiles**: calibrate corners once per camera mount
   (`profiles/*.json`); every capture from that camera then generates a validated
   config. Frame dimensions must match the calibration exactly, and an optional

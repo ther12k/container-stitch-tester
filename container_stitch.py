@@ -35,7 +35,7 @@ from typing import Any
 import cv2
 import numpy as np
 
-VERSION = "2.1.0"
+VERSION = "2.3.0"
 MAX_PIXELS = 25_000_000
 MAX_DIM = 20_000
 MAX_REGIONS = 16
@@ -368,7 +368,7 @@ def load_job(config_path: Path, mode: str | None = None, input_path: Path | None
         config = legacy_to_job(config, str(input_path.resolve()))
         warnings.append("Legacy config adapted. Physical grouping comes from its manual selections, not detection.")
     object_keys(config, {"schema_version", "mode", "height", "gap_px", "sources", "containers", "notes",
-                         "direction", "layout", "cross_size_px"}, "job")
+                         "direction", "layout", "cross_size_px", "edge_alignment"}, "job")
     version = integer(config.get("schema_version"), "schema_version", 1, 2)
     if version == 2 and "direction" not in config:
         raise ProcessingError("Schema 2 requires an explicit direction: horizontal, vertical, or auto.")
@@ -405,6 +405,12 @@ def load_job(config_path: Path, mode: str | None = None, input_path: Path | None
     if mode is not None and mode != config["mode"]:
         raise ProcessingError("CLI mode conflicts with configuration mode; refusing to reinterpret grouping.")
     config["gap_px"] = integer(config.get("gap_px", 12), "gap_px", 1, 256)
+    if "edge_alignment" in config:
+        if config["edge_alignment"] not in ("butt", "measure"):
+            raise ProcessingError('edge_alignment must be "butt" (declared corners joined as-is) '
+                                  'or "measure" (feature-measured seam refinement).')
+    else:
+        config["edge_alignment"] = "butt"
     containers = config.get("containers")
     if not isinstance(containers, list) or not 1 <= len(containers) <= 8:
         raise ProcessingError("containers must contain 1..8 physical-container groups.")
@@ -545,7 +551,7 @@ def load_job(config_path: Path, mode: str | None = None, input_path: Path | None
             integer(seam["position_px"], "seam.position_px", 0, MAX_DIM)
             if seam.get("policy") != "source_selected":
                 raise ProcessingError("An explicit seam position requires source_selected policy.")
-        groups.append(Group(c, regions))
+        groups.append(Group({**c, "edge_alignment": config["edge_alignment"]}, regions))
     return config, images, records, groups, warnings
 
 
@@ -592,6 +598,179 @@ def edge_diagnostic(a: Region, b: Region, out: Path) -> dict[str, Any]:
     return {"kind": "diagnostic_only", "tests": tests, "best_mutual_unique_candidates": best,
             "alignment_applied": False, "overlap_verified": False,
             "note": "Candidate matches do not establish overlap. No inferred overlap is removed in edge mode."}
+
+
+# Clamps for the feature-measured edge seam refinement. Deliberately tight:
+# the correction is translation-only and must look like a mislocated quad,
+# not like two different views of the surface. "strong" evidence (>=20
+# inliers spanning the strip) upgrades the quality state; weaker evidence
+# still applies a disclosed translation fix but keeps the amber state.
+SEAM_ALIGN_CLAMP = {
+    "min_inliers": 12, "strong_inliers": 20, "max_candidates": 8,
+    "max_median_error_px": 2.0, "max_overlap_fraction": 0.45,
+    "max_cross_offset_fraction": 0.14, "scale_range": (0.85, 1.15),
+    "max_rotation_deg": 3.0, "min_spread_fraction": 0.55,
+    "max_measured_gap_px": 4,
+    "min_promotion_overlap_px": 24, "max_promotion_median_error_px": 2.5,
+}
+
+
+def measure_strip_alignment(a: np.ndarray, va: np.ndarray, b: np.ndarray, vb: np.ndarray,
+                            direction: str) -> dict[str, Any]:
+    """Feature-measured rigid offset between two warped edge strips (B -> A).
+
+    SIFT + mutual ratio-test matches + RANSAC similarity, entirely on the
+    already-rectified strips: same pixels in, same numbers out. Decides
+    whether a clamped translation correction is supportable; applying it is
+    the caller's decision. This is a measured refinement of declared corners,
+    not an independent verification of container identity.
+    """
+    clamp = SEAM_ALIGN_CLAMP
+    out: dict[str, Any] = {"enabled": True, "applied": False, "direction": direction,
+                           "note": "SIFT + RANSAC similarity measured on the warped strips."}
+    # warp() returns premultiplied float pixels; SIFT needs 8-bit gray. Small
+    # cross sizes (e.g. 320 px) starve the detector, so match at 2x and
+    # divide the measured geometry back down.
+    up = 2 if max(a.shape[0], a.shape[1]) < 2400 else 1
+    gray_a = cv2.cvtColor(np.clip(a, 0, 255).astype(np.uint8), cv2.COLOR_BGR2GRAY)
+    gray_b = cv2.cvtColor(np.clip(b, 0, 255).astype(np.uint8), cv2.COLOR_BGR2GRAY)
+    if up > 1:
+        gray_a = cv2.resize(gray_a, None, fx=up, fy=up, interpolation=cv2.INTER_CUBIC)
+        gray_b = cv2.resize(gray_b, None, fx=up, fy=up, interpolation=cv2.INTER_CUBIC)
+        va = cv2.resize(va.astype(np.uint8), None, fx=up, fy=up, interpolation=cv2.INTER_NEAREST)
+        vb = cv2.resize(vb.astype(np.uint8), None, fx=up, fy=up, interpolation=cv2.INTER_NEAREST)
+    sift = cv2.SIFT_create(nfeatures=8000, contrastThreshold=0.01)
+    ka, da = sift.detectAndCompute(gray_a, va.astype(np.uint8) * 255)
+    kb, db = sift.detectAndCompute(gray_b, vb.astype(np.uint8) * 255)
+    out["keypoints_first"], out["keypoints_second"] = len(ka), len(kb)
+    if da is None or db is None or min(len(da), len(db)) < 2:
+        out["reason"] = "too few features on the warped strips"
+        return out
+    bf = cv2.BFMatcher(cv2.NORM_L2)
+    forward = {m.queryIdx: m for pair in bf.knnMatch(db, da, k=2) if len(pair) == 2
+               for m, n in [pair] if m.distance < 0.80 * n.distance}
+    reverse = {m.queryIdx: m for pair in bf.knnMatch(da, db, k=2) if len(pair) == 2
+               for m, n in [pair] if m.distance < 0.80 * n.distance}
+    good, seen_a, seen_b = [], set(), set()
+    for m in sorted(forward.values(), key=lambda v: v.distance):
+        rev = reverse.get(m.trainIdx)
+        pa = tuple(round(v, 1) for v in ka[m.trainIdx].pt)
+        pb = tuple(round(v, 1) for v in kb[m.queryIdx].pt)
+        if rev is not None and rev.trainIdx == m.queryIdx and pa not in seen_a and pb not in seen_b:
+            good.append(m)
+            seen_a.add(pa)
+            seen_b.add(pb)
+    out["matches"] = len(good)
+    if len(good) < clamp["max_candidates"]:
+        out["reason"] = "fewer than 8 candidate matches between the strips"
+        return out
+    src = np.float32([kb[m.queryIdx].pt for m in good]).reshape(-1, 1, 2) / up
+    dst = np.float32([ka[m.trainIdx].pt for m in good]).reshape(-1, 1, 2) / up
+    model, mask = cv2.estimateAffinePartial2D(src, dst, method=cv2.RANSAC,
+                                              ransacReprojThreshold=3.0,
+                                              maxIters=5000, confidence=0.999)
+    if model is None or mask is None:
+        out["reason"] = "RANSAC found no consistent model"
+        return out
+    inlier = mask.astype(bool).ravel()
+    out["inliers"] = int(inlier.sum())
+    out["inlier_ratio"] = float(inlier.mean())
+    if out["inliers"] < 4:
+        out["reason"] = "too few RANSAC inliers"
+        return out
+    residual = np.linalg.norm(cv2.transform(src, model).reshape(-1, 2) - dst.reshape(-1, 2), axis=1)
+    median_err = float(np.median(residual[inlier]))
+    scale = float(np.hypot(model[0, 0], model[1, 0]))
+    rotation = float(np.degrees(np.arctan2(model[1, 0], model[0, 0])))
+    tx, ty = float(model[0, 2]), float(model[1, 2])
+    out["median_reprojection_error_px"] = round(median_err, 2)
+    out["scale_measured"] = round(scale, 4)
+    out["rotation_deg"] = round(rotation, 2)
+    out["translation_px"] = [round(tx, 2), round(ty, 2)]
+    h_a, w_a = a.shape[:2]
+    h_b, w_b = b.shape[:2]
+    pts_b = src.reshape(-1, 2)[inlier]
+    if direction == "horizontal":
+        along, cross = w_a - tx, ty
+        spread_pts = pts_b[:, 1]
+        spread_ref, limit_ref = float(h_b), float(h_a)
+    else:
+        along, cross = h_a - ty, tx
+        spread_pts = pts_b[:, 0]
+        spread_ref, limit_ref = float(w_b), float(w_a)
+    spread = float(spread_pts.max() - spread_pts.min()) if len(spread_pts) else 0.0
+    out["measured_overlap_px"] = int(round(along))
+    out["cross_offset_px"] = round(cross, 2)
+    out["inlier_spread_px"] = round(spread, 1)
+    strip_len = w_b if direction == "horizontal" else h_b
+    gates = {
+        "min_inliers": out["inliers"] >= clamp["min_inliers"],
+        "median_error": median_err <= clamp["max_median_error_px"],
+        "scale_bounds": clamp["scale_range"][0] <= scale <= clamp["scale_range"][1],
+        "rotation_bounds": abs(rotation) <= clamp["max_rotation_deg"],
+        "overlap_bounds": (-clamp["max_measured_gap_px"]
+                           <= along <= clamp["max_overlap_fraction"] * (w_b if direction == "horizontal" else h_b)),
+        "cross_offset_bounds": abs(cross) <= clamp["max_cross_offset_fraction"] * limit_ref,
+    }
+    out["sanity_checks"] = gates
+    # "strong" requires inliers that span the strip, not just one feature band
+    # (e.g. lettering); only strong evidence upgrades the quality state.
+    out["strong"] = bool(out["inliers"] >= clamp["strong_inliers"]
+                         and median_err <= clamp["max_median_error_px"]
+                         and spread >= clamp["min_spread_fraction"] * spread_ref)
+    out["inlier_spread_note"] = (
+        "inliers concentrate in a narrow band; the translation is well-evidenced there but "
+        "cross-axis scale drift is not corrected" if spread < clamp["min_spread_fraction"] * spread_ref
+        else "inliers span the strip height")
+    # Overlap candidate: the strips demonstrably share coverage, so the
+    # verified overlap method (with its own fixed proof standards) may accept
+    # this pair even when the translation-only evidence is thin.
+    out["promotion_candidate"] = bool(
+        len(good) >= clamp["max_candidates"]
+        and median_err <= clamp["max_promotion_median_error_px"]
+        and clamp["scale_range"][0] <= scale <= clamp["scale_range"][1]
+        and abs(rotation) <= clamp["max_rotation_deg"]
+        and along >= max(clamp["min_promotion_overlap_px"], 0.08 * strip_len))
+    failed = [name for name, ok in gates.items() if not ok]
+    if failed:
+        out["reason"] = ("measured geometry outside clamps: " + ", ".join(failed)
+                         if not out["promotion_candidate"] else
+                         "translation refinement declined; overlap promotion is the better fix")
+        return out
+    out["applied"] = True
+    out["trim_px"] = max(0, int(round(along)))
+    out["shift_px"] = round(cross, 2)
+    out["warning"] = ("Correction is measured from pixels; repeated corrugations can alias by one "
+                      "period. Visual review of the seam is still required.")
+    return out
+
+
+def _realigned_strip(b: np.ndarray, vb: np.ndarray, alignment: dict[str, Any],
+                     direction: str) -> tuple[np.ndarray, np.ndarray]:
+    """Trim the measured overlap and apply the clamped cross-axis shift."""
+    trim = alignment["trim_px"]
+    shift = float(alignment["shift_px"])
+    if direction == "horizontal":
+        if trim > 0:
+            b, vb = b[:, trim:], vb[:, trim:]
+        if abs(shift) >= 0.5:
+            h, w = b.shape[:2]
+            model = np.float32([[1, 0, 0], [0, 1, shift]])
+            b = cv2.warpAffine(b, model, (w, h), flags=cv2.INTER_LINEAR,
+                               borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+            vb = cv2.warpAffine(vb.astype(np.uint8), model, (w, h),
+                                flags=cv2.INTER_NEAREST, borderValue=0).astype(bool)
+    else:
+        if trim > 0:
+            b, vb = b[trim:, :], vb[trim:, :]
+        if abs(shift) >= 0.5:
+            h, w = b.shape[:2]
+            model = np.float32([[1, 0, shift], [0, 1, 0]])
+            b = cv2.warpAffine(b, model, (w, h), flags=cv2.INTER_LINEAR,
+                               borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+            vb = cv2.warpAffine(vb.astype(np.uint8), model, (w, h),
+                                flags=cv2.INTER_NEAREST, borderValue=0).astype(bool)
+    return b, vb
 
 
 def balance_edges(a: np.ndarray, b: np.ndarray, va: np.ndarray, vb: np.ndarray,
@@ -838,6 +1017,7 @@ class StitchDiagnostics:
     seam_points: list[list[int]] | None = None
     feather_px: int | None = None
     median_reprojection_error_px: float | None = None
+    seam_alignment: dict[str, Any] | None = None
     sanity: dict[str, Any] | None = None
 
     def to_payload(self) -> dict[str, Any]:
@@ -860,6 +1040,7 @@ class StitchDiagnostics:
             "seam_points_in_output": self.seam_points,
             "feather_px": self.feather_px,
             "median_reprojection_error_px": self.median_reprojection_error_px,
+            "seam_alignment": self.seam_alignment,
             "sanity_checks": self.sanity or {},
             "note": "Deterministic engine diagnostic. Rendering never re-evaluates quality.",
         }
@@ -1251,6 +1432,33 @@ def process_group(group: Group, cross_size: int, out: Path, no_balance: bool,
         pixels, valid = warp(region.image, region.mask, H, size)
         warped.append(pixels); valids.append(valid); transforms.append(H)
         save_image(out / f"section_{index}_geometry.png", bgra(pixels, valid))
+    # Optional feature-measured seam refinement (edge only): measure the true
+    # offset between the two warped strips. When the strips demonstrably share
+    # coverage, first try promoting the pair to the verified overlap method
+    # (same fixed proof standards, more sensitive feature detection); only
+    # fall back to a clamped translation correction on the edge join itself.
+    alignment: dict[str, Any] = {"enabled": False}
+    if len(warped) == 2 and group.config.get("edge_alignment") == "measure":
+        alignment = measure_strip_alignment(warped[0], valids[0], warped[1], valids[1], direction)
+        if alignment.get("promotion_candidate"):
+            matching_cfg = dict(group.config.get("matching") or {})
+            matching_cfg.setdefault("contrast_threshold", 0.01)
+            promo = Group({**group.config, "method": "overlap", "matching": matching_cfg,
+                           "edge_alignment": "butt"}, group.regions)
+            try:
+                tile = overlap_group(promo, cross_size, out, direction)
+                tile.report["promoted_from_edge"] = {
+                    "reason": "measured overlap between the declared edge regions; "
+                              "promoted to the verified overlap method",
+                    "seam_alignment": alignment}
+                if tile.diagnostics is not None:
+                    tile.diagnostics.seam_alignment = {**alignment, "promotion_used": True}
+                return tile
+            except ProcessingError as exc:
+                alignment["promotion_attempted"] = True
+                alignment["promotion_rejected"] = str(exc)[:200]
+        if alignment.get("applied"):
+            warped[1], valids[1] = _realigned_strip(warped[1], valids[1], alignment, direction)
     array_axis = 0 if direction == "vertical" else 1
     output_length = sum(p.shape[array_axis] for p in warped)
     check_size(cross_size, output_length) if direction == "vertical" else check_size(output_length, cross_size)
@@ -1292,25 +1500,47 @@ def process_group(group: Group, cross_size: int, out: Path, no_balance: bool,
         seam_pts = ([[seam, 0], [seam, out_h - 1]] if direction == "horizontal"
                     else [[0, seam], [out_w - 1, seam]])
         fade = int(exposure.get("fade_px", 0)) if isinstance(exposure, dict) else 0
+        strong_alignment = bool(alignment.get("applied") and alignment.get("strong"))
+        status = "edge_join_feature_aligned" if strong_alignment else "manual_edge_join_unverified"
+        quality = "overlap_requires_visual_review" if strong_alignment else "unverified_edge_composite"
         edge_diag = StitchDiagnostics(
-            method="edge", status="manual_edge_join_unverified",
-            quality_state="unverified_edge_composite", direction=direction,
+            method="edge", status=status,
+            quality_state=quality, direction=direction,
             source_size_wh=[[a.image.shape[1], a.image.shape[0]], [b.image.shape[1], b.image.shape[0]]],
             detected_corners=[(a.quad + np.float32(a.box[:2])).tolist(),
                               (b.quad + np.float32(b.box[:2])).tolist()],
-            matches_total=diagnostic.get("best_mutual_unique_candidates"),
+            matches_total=(alignment.get("matches") if alignment.get("enabled")
+                           else diagnostic.get("best_mutual_unique_candidates")),
+            inliers=(alignment.get("inliers") if alignment.get("enabled") else None),
+            inlier_ratio=(alignment.get("inlier_ratio") if alignment.get("enabled") else None),
+            median_reprojection_error_px=(alignment.get("median_reprojection_error_px")
+                                          if alignment.get("enabled") else None),
             seam_points=seam_pts, feather_px=fade or None,
-            sanity={"overlap_verified": False,
-                    "note": "edge adjacency is configured, not feature-proven"})
-        report = {"method": "edge", "status": "manual_edge_join_unverified",
-                  "overlap_alignment_applied": False, "independently_verified_overlap": False,
+            seam_alignment=alignment if alignment.get("enabled") else None,
+            sanity={"overlap_verified": bool(strong_alignment),
+                    "note": ("seam translation was feature-measured and applied within clamps"
+                             if strong_alignment else
+                             "edge adjacency is configured, not feature-proven")})
+        warnings = ["No overlap was established or removed; edge adjacency comes from the configuration.",
+                    "Physical proportions, surface continuity and corrugation count at the seam are unverified.",
+                    "Exposure balancing assumes comparable paint and can alter appearance near the seam."]
+        if strong_alignment:
+            warnings = ["The seam position and cross-axis offset were measured from pixels (SIFT + RANSAC) "
+                        "and applied within tight clamps; declared corners were refined, not replaced.",
+                        "Repeated corrugations can alias the measurement by one period; review the seam visually."]
+        elif alignment.get("applied"):
+            warnings = ["The seam was refined by a translation measured from pixels with limited feature "
+                        "support; no overlap verification passed, so treat the output as unreviewed.",
+                        "Repeated corrugations can alias the measurement by one period; review the seam visually."]
+        report = {"method": "edge", "status": status,
+                  "overlap_alignment_applied": bool(alignment.get("applied")),
+                  "independently_verified_overlap": False,
                   "same_surface_confirmed_by_operator": True,
                   "join_y" if direction == "vertical" else "join_x": seam,
+                  "seam_alignment": alignment if alignment.get("enabled") else None,
                   "exposure": exposure, "overlap_diagnostic": diagnostic,
                   "regions": [a.report(transforms[0]), b.report(offset @ transforms[1])],
-                  "warnings": ["No overlap was established or removed; edge adjacency comes from the configuration.",
-                               "Physical proportions, surface continuity and corrugation count at the seam are unverified.",
-                               "Exposure balancing assumes comparable paint and can alter appearance near the seam."],
+                  "warnings": warnings,
                   "diagnostics": edge_diag.to_payload()}
     check_size(image.shape[1], image.shape[0])
     diag_obj = edge_diag if method == "edge" else (diagnostics if method == "rectify" else None)
@@ -1462,7 +1692,10 @@ def run_job(config_path: Path | str, out: Path | str, *, mode: str | None = None
             save_image(stage / "selected_regions" / f"{name}.jpg", annotated)
         write_json(stage / "resolved_config.json", config)
         method_statuses = [t.report.get("status", "unknown") for t in tiles]
-        if any(v == "manual_edge_join_unverified" for v in method_statuses):
+        if any(v == "edge_join_feature_aligned" for v in method_statuses):
+            quality_state = "overlap_requires_visual_review"
+            quality_label = "Seam realigned by feature match; visual review required"
+        elif any(v == "manual_edge_join_unverified" for v in method_statuses):
             quality_state = "unverified_edge_composite"
             quality_label = "Created, but overlap was not verified"
         elif any(v == "overlap_estimated_requires_visual_review" for v in method_statuses):

@@ -262,12 +262,19 @@ def plan_to_config(plan: dict[str, Any], width: int, height: int) -> dict[str, A
     if direction not in ("horizontal", "vertical"):
         direction = "vertical" if height > width else "horizontal"
 
+    # The planner's quad corners are estimates; let the engine measure the
+    # seam between edge-joined strips from pixels (SIFT + RANSAC) and apply a
+    # clamped correction instead of butting possibly-mislocated quads.
+    edge_methods = {c.get("method") for c in plan.get("containers", [])}
+    edge_alignment = "measure" if "edge" in edge_methods else "butt"
+
     config = {
         "schema_version": 2,
         "mode": "combo" if len(containers_out) > 1 else "single",
         "direction": direction,
         "cross_size_px": 320,
         "gap_px": 12,
+        "edge_alignment": edge_alignment,
         "sources": {"main": {"path": "input.png", "expected_size_wh": [width, height]}},
         "containers": containers_out,
         "notes": (f"AI-proposed plan ({plan.get('reason', 'no reason given')}). "

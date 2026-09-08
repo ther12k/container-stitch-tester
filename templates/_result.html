@@ -140,6 +140,27 @@
         </div>
         {% endif %}
 
+        {% if panel.seam_alignment %}
+          {% if panel.promoted_from_edge %}
+          <p class="text-[10px] text-mute mt-1.5">
+            📐 <b class="text-ink">Promoted to verified overlap:</b> the declared edge regions measured
+            ~{{ panel.seam_alignment.measured_overlap_px }} px of shared coverage, so the pair was re-proven
+            with the overlap method ({{ panel.seam_alignment.inliers }} strip inliers, scale
+            {{ panel.seam_alignment.scale_measured }}).
+          </p>
+          {% elif panel.seam_alignment.applied %}
+          <p class="text-[10px] text-mute mt-1.5">
+            📐 <b class="text-ink">Seam realigned from pixels:</b>
+            trimmed {{ panel.seam_alignment.trim_px }} px measured overlap,
+            cross-axis shift {{ panel.seam_alignment.shift_px }} px
+            ({{ panel.seam_alignment.inliers }} inliers,
+            {{ '%.1f' % panel.seam_alignment.median_reprojection_error_px }} px median error).
+          </p>
+          {% else %}
+          <p class="text-[10px] text-mute mt-1.5">📐 Seam measurement attempted — not applied: {{ panel.seam_alignment.reason }}</p>
+          {% endif %}
+        {% endif %}
+
         <!-- Metadata chips -->
         <div class="grid grid-cols-4 gap-1.5 mt-2">
           <div class="chip"><span class="chip-label">Output size</span><span class="chip-value">{{ panel.output_size_wh | join(' × ') if panel.output_size_wh else '—' }}</span></div>
