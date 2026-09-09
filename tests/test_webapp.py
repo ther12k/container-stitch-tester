@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -211,6 +212,108 @@ class PublicExposureTests(unittest.TestCase):
         expected = (webapp.BASE_DIR / "sources" / "single_grey.png").is_file()
         self.assertEqual(webapp._recipe_available(ok), expected)
         self.assertFalse(webapp._recipe_available(missing))
+
+
+class AuthTests(unittest.TestCase):
+    """Password gate (CST_PASSWORD) — deployed instances require a login."""
+
+    def _client(self, password: str):
+        import app as webapp
+        saved = os.environ.get("CST_PASSWORD")
+        os.environ["CST_PASSWORD"] = password
+        try:
+            application = webapp.create_app()
+        finally:
+            if saved is None:
+                os.environ.pop("CST_PASSWORD", None)
+            else:
+                os.environ["CST_PASSWORD"] = saved
+        application.config["TESTING"] = True
+        return application.test_client()
+
+    def test_no_password_means_no_gate(self):
+        client = self._client("")
+        self.assertEqual(client.get("/").status_code, 200)
+
+    def test_password_redirects_to_login(self):
+        client = self._client("secret123")
+        resp = client.get("/")
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("/login", resp.headers["Location"])
+
+    def test_login_flow(self):
+        client = self._client("secret123")
+        page = client.get("/login").get_data(as_text=True)
+        self.assertIn("Password", page)
+        bad = client.post("/login", data={"password": "wrong"})
+        self.assertIn("Incorrect password", bad.get_data(as_text=True))
+        ok = client.post("/login", data={"password": "secret123"})
+        self.assertEqual(ok.status_code, 302)
+        self.assertEqual(client.get("/").status_code, 200)
+
+    def test_logout_clears_session(self):
+        client = self._client("secret123")
+        client.post("/login", data={"password": "secret123"})
+        self.assertEqual(client.get("/").status_code, 200)
+        client.post("/logout")
+        self.assertEqual(client.get("/").status_code, 302)
+
+    def test_open_redirect_blocked(self):
+        client = self._client("secret123")
+        client.post("/login", data={"password": "secret123"})
+        resp = client.post("/login?next=//evil.example.com", data={"password": "secret123"})
+        self.assertNotIn("evil.example.com", resp.headers.get("Location", ""))
+
+
+class ServerAiDefaultsTests(unittest.TestCase):
+    def _with_env(self, **env):
+        import app as webapp
+        keys = list(env)
+        saved = {k: os.environ.get(k) for k in keys}
+        os.environ.update(env)
+        try:
+            return webapp.server_ai_defaults()
+        finally:
+            for k in keys:
+                if saved[k] is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = saved[k]
+
+    def test_absent_when_unset(self):
+        self.assertIsNone(self._with_env(CST_AI_PLANNER_BASE="", CST_AI_PLANNER_MODEL=""))
+
+    def test_present_with_env(self):
+        defaults = self._with_env(
+            CST_AI_PLANNER_BASE="https://api.example.com/v1",
+            CST_AI_PLANNER_KEY="test-key-value",
+            CST_AI_PLANNER_MODEL="test-model",
+            CST_AI_REVIEWER_BASE="https://api.example.com/v1",
+            CST_AI_REVIEWER_KEY="test-key-value",
+            CST_AI_REVIEWER_MODEL="reviewer-model")
+        self.assertTrue(defaults["server_defaults"])
+        self.assertEqual(defaults["planner"]["model"], "test-model")
+        self.assertEqual(defaults["reviewer"]["model"], "reviewer-model")
+
+    def test_api_never_exposes_secrets(self):
+        client = _client()
+        keys = ("CST_AI_PLANNER_BASE", "CST_AI_PLANNER_KEY", "CST_AI_PLANNER_MODEL")
+        saved = {k: os.environ.get(k) for k in keys}
+        os.environ.update({"CST_AI_PLANNER_BASE": "https://api.example.com/v1",
+                           "CST_AI_PLANNER_KEY": "TEST-SECRET-VALUE",
+                           "CST_AI_PLANNER_MODEL": "test-model"})
+        try:
+            page = client.get("/api/ai-defaults").get_data(as_text=True)
+            self.assertIn("configured", page)
+            self.assertIn("test-model", page)
+            self.assertNotIn("TEST-SECRET-VALUE", page)
+            self.assertNotIn("api.example.com", page)
+        finally:
+            for k in keys:
+                if saved[k] is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = saved[k]
 
 
 if __name__ == "__main__":

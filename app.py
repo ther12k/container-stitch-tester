@@ -226,13 +226,74 @@ def _sweep_old_jobs(ttl_seconds: float, interval_seconds: float = 3600) -> None:
         time.sleep(interval_seconds)
 
 
+def server_ai_defaults() -> dict | None:
+    """Operator-configured AI providers (CST_AI_* env vars) for hosted demos.
+
+    Keys never reach the browser: /api/ai-defaults only exposes whether
+    defaults exist plus the model names for display. Returns a settings-shaped
+    dict, or None when not configured."""
+    p_base = os.environ.get("CST_AI_PLANNER_BASE", "")
+    p_model = os.environ.get("CST_AI_PLANNER_MODEL", "")
+    if not (p_base and p_model):
+        return None
+    r_base = os.environ.get("CST_AI_REVIEWER_BASE", "")
+    r_model = os.environ.get("CST_AI_REVIEWER_MODEL", "")
+    return {
+        "planner": {"base_url": p_base, "api_key": os.environ.get("CST_AI_PLANNER_KEY", ""),
+                    "model": p_model},
+        "reviewer": ({"base_url": r_base, "api_key": os.environ.get("CST_AI_REVIEWER_KEY", ""),
+                      "model": r_model} if (r_base and r_model) else {}),
+        "server_defaults": True,
+    }
+
+
 def create_app() -> Flask:
     app = Flask(__name__)
     # 64 MB covers a multi-photo custom run; larger bodies get a 413.
     app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024
     app.config["CST_PUBLIC"] = os.environ.get("CST_PUBLIC", "") == "1"
+    password = os.environ.get("CST_PASSWORD", "")
+    app.config["CST_PASSWORD"] = password
+    if password:
+        # Stable session secret derived from the password so restarts do not
+        # log users out; override with CST_SECRET for multi-instance setups.
+        import hashlib
+        app.secret_key = os.environ.get("CST_SECRET") or hashlib.sha256(
+            b"cst-session:" + password.encode()).digest()
     if app.config["CST_PUBLIC"]:
         threading.Thread(target=_sweep_old_jobs, args=(7 * 24 * 3600,), daemon=True).start()
+
+    @app.before_request
+    def _require_login():
+        if not password:
+            return None
+        if request.path == "/login" or request.path.startswith("/static/"):
+            return None
+        from flask import session, redirect
+        if not session.get("auth"):
+            return redirect(url_for("login", next=request.path))
+        return None
+
+    @app.route("/login", methods=["GET", "POST"])
+    def login():
+        from flask import session, redirect
+        error = ""
+        if request.method == "POST":
+            if request.form.get("password", "") == password:
+                session["auth"] = True
+                session.permanent = True
+                target = request.args.get("next") or "/"
+                if not target.startswith("/") or target.startswith("//"):
+                    target = "/"
+                return redirect(target)
+            error = "Incorrect password."
+        return render_template("login.html", error=error)
+
+    @app.post("/logout")
+    def logout():
+        from flask import session, redirect
+        session.clear()
+        return redirect(url_for("login"))
 
     @app.get("/")
     def index() -> str:
@@ -250,6 +311,7 @@ def create_app() -> Flask:
             n_examples=len([e for e in EXAMPLE_RECIPES if e["kind"] == "job"]),
             n_sources=n_sources,
             avg_runtime=avg,
+            auth_enabled=bool(password),
         )
 
     # ---- shared run logic (direct routes = silent; /runs/stream = live events) ----
@@ -568,19 +630,34 @@ def create_app() -> Flask:
             return render_result_error("AI settings are not valid JSON.")
 
         planner = settings.get("planner") or {}
+        reviewer = settings.get("reviewer") or {}
+        server_defaults = False
+        if not (planner.get("base_url") and planner.get("model")):
+            defaults = server_ai_defaults()
+            if defaults:
+                settings = {**settings, **defaults}
+                planner = defaults["planner"]
+                reviewer = defaults.get("reviewer", {})
+                server_defaults = True
+                emit("run", f"no custom AI settings — using operator-configured defaults "
+                            f"(planner {planner.get('model', '')})")
         if not planner.get("base_url") or not planner.get("model"):
             return render_result_error("AI planning needs a planner endpoint and model — open ⚙ AI settings.")
-        reviewer = settings.get("reviewer") or {}
         has_reviewer = bool(reviewer.get("base_url") and reviewer.get("model"))
+        try:
+            max_attempts = max(1, min(int(settings.get("max_attempts", 3)), 4))
+        except (TypeError, ValueError):
+            max_attempts = 3
+        if server_defaults:
+            try:
+                max_attempts = max(1, min(int(os.environ.get("CST_AI_MAX_ATTEMPTS", max_attempts)), 4))
+            except (TypeError, ValueError):
+                pass
         if app.config.get("CST_PUBLIC"):
             guard_error = _assert_public_ai_endpoints(settings)
             if guard_error:
                 emit("error", guard_error)
                 return render_result_error(guard_error)
-        try:
-            max_attempts = max(1, min(int(settings.get("max_attempts", 3)), 4))
-        except (TypeError, ValueError):
-            max_attempts = 3
 
         if image is None or not image["filename"]:
             return render_result_error("Stage an image first — AI planning runs on the staged photo.")
@@ -835,6 +912,18 @@ def create_app() -> Flask:
         if not thumb.is_file():
             abort(404)
         return send_file(thumb, mimetype="image/png")
+
+    @app.get("/api/ai-defaults")
+    def api_ai_defaults() -> Response:
+        """Whether operator-configured AI defaults exist — never the secrets."""
+        defaults = server_ai_defaults()
+        if not defaults:
+            return Response(json.dumps({"configured": False}), mimetype="application/json")
+        return Response(json.dumps({
+            "configured": True,
+            "planner_model": defaults["planner"].get("model", ""),
+            "reviewer_model": defaults.get("reviewer", {}).get("model", ""),
+        }), mimetype="application/json")
 
     @app.get("/api/profiles")
     def api_profiles() -> Response:

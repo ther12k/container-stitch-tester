@@ -104,6 +104,15 @@
           Run Test
           <span class="kbd">⌘K</span>
         </button>
+        {% if auth_enabled %}
+        <form method="post" action="/logout" class="contents">
+          <button type="submit" title="Sign out"
+                  class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 text-xs font-medium transition-colors">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
+            Sign out
+          </button>
+        </form>
+        {% endif %}
       </div>
     </nav>
   </div><!-- /dark shell -->
@@ -407,6 +416,10 @@
         <button onclick="closeAiModal()" class="w-8 h-8 rounded-lg hover:bg-soft flex items-center justify-center text-mute hover:text-ink transition-colors">✕</button>
       </div>
       <div class="flex-1 overflow-auto p-5 space-y-4 text-sm">
+        <div id="ai-server-note" class="hidden rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] px-3 py-2">
+          ✓ This server has operator-configured AI defaults. They are used automatically when you
+          don't enter your own endpoint below — keys never leave the server.
+        </div>
         <div>
           <p class="font-semibold text-xs mb-2">Planner <span class="text-mute font-normal">— first-pass vision model (required)</span></p>
           <div class="space-y-2">
@@ -855,9 +868,24 @@ const AI_DEFAULTS = {
   max_attempts: 3,
   request_timeout: 90,
 };
+/* Operator-configured AI defaults on hosted deployments (CST_AI_* env vars).
+   Only model names are exposed — endpoints/keys stay server-side. */
+const SERVER_AI = { configured: false, planner_model: '', reviewer_model: '' };
+fetch('/api/ai-defaults').then(r => r.json()).then(d => {
+  Object.assign(SERVER_AI, d);
+  refreshAiUi();
+}).catch(() => {});
+function hasStoredAi(s) { return !!(s.planner?.base_url && s.planner?.model); }
 function loadAiSettings() {
   let stored = {};
   try { stored = JSON.parse(localStorage.getItem(AI_STORE)) || {}; } catch (_) {}
+  if (!hasStoredAi(stored) && SERVER_AI.configured) {
+    return {
+      planner: {}, reviewer: {}, server_defaults: true,
+      max_attempts: stored.max_attempts || AI_DEFAULTS.max_attempts,
+      request_timeout: stored.request_timeout || AI_DEFAULTS.request_timeout,
+    };
+  }
   return {
     planner: { ...AI_DEFAULTS.planner, ...(stored.planner || {}) },
     reviewer: { ...AI_DEFAULTS.reviewer, ...(stored.reviewer || {}) },
@@ -878,6 +906,7 @@ function saveAiSettings() {
 }
 function openAiModal() {
   const s = loadAiSettings();
+  if (SERVER_AI.configured) document.getElementById('ai-server-note').classList.remove('hidden');
   document.getElementById('ai-p-base').value = s.planner?.base_url || '';
   document.getElementById('ai-p-key').value = s.planner?.api_key || '';
   document.getElementById('ai-p-model').value = s.planner?.model || '';
@@ -898,12 +927,19 @@ function refreshAiUi() {
   const on = document.getElementById('ai-toggle').checked;
   const summary = document.getElementById('ai-summary');
   const btn = document.querySelector('#panel-json form button[type="submit"]');
-  const hasPlanner = s.planner?.base_url && s.planner?.model;
+  let hasPlanner = s.planner?.base_url && s.planner?.model;
+  if (s.server_defaults) hasPlanner = SERVER_AI.configured;
   summary.classList.toggle('hidden', !(on && hasPlanner));
   if (on && hasPlanner) {
-    summary.textContent = s.reviewer?.base_url && s.reviewer?.model
-      ? `${s.planner.model} → ${s.reviewer.model}`
-      : `${s.planner.model} (no reviewer)`;
+    if (s.server_defaults) {
+      summary.textContent = SERVER_AI.reviewer_model
+        ? `server defaults: ${SERVER_AI.planner_model} → ${SERVER_AI.reviewer_model}`
+        : `server defaults: ${SERVER_AI.planner_model}`;
+    } else {
+      summary.textContent = s.reviewer?.base_url && s.reviewer?.model
+        ? `${s.planner.model} → ${s.reviewer.model}`
+        : `${s.planner.model} (no reviewer)`;
+    }
   }
   btn.innerHTML = on
     ? '<svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path d="M10 2a1 1 0 011 1v1.06a5.5 5.5 0 013.39 1.42l.75-.75a1 1 0 111.41 1.41l-.75.75A5.5 5.5 0 0117 10.25h1a1 1 0 110 2h-1.06a5.5 5.5 0 01-1.42 3.39l.75.75a1 1 0 11-1.41 1.41l-.75-.75A5.5 5.5 0 0111 18.44V19.5a1 1 0 11-2 0v-1.06a5.5 5.5 0 01-3.39-1.42l-.75.75a1 1 0 11-1.41-1.41l.75-.75A5.5 5.5 0 013 12.25H2a1 1 0 110-2h1.06a5.5 5.5 0 011.42-3.39l-.75-.75a1 1 0 111.41-1.41l.75.75A5.5 5.5 0 0110 4.06V3a1 1 0 011-1zm1 6.5a1 1 0 100 2 1 1 0 000-2z"/></svg> Run with AI plan'
@@ -913,7 +949,7 @@ function aiToggled() { refreshAiUi(); }
 
 async function aiRun() {
   const s = loadAiSettings();
-  if (!s.planner?.base_url || !s.planner?.model) {
+  if (!s.server_defaults && !hasStoredAi(s)) {
     openAiModal();
     return;
   }
@@ -1031,7 +1067,7 @@ document.querySelector('#panel-json form').addEventListener('submit', function (
   const aiOn = document.getElementById('ai-toggle').checked;
   if (aiOn) {
     const st = loadAiSettings();
-    if (!st.planner?.base_url || !st.planner?.model) { openAiModal(); return; }
+    if (!st.server_defaults && !hasStoredAi(st)) { openAiModal(); return; }
     if (!document.getElementById('sources-editor').files.length) {
       const t = document.getElementById('paste-toast');
       t.textContent = '⚠ Stage an image first — AI planning runs on the staged photo';
