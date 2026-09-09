@@ -35,7 +35,7 @@ from typing import Any
 import cv2
 import numpy as np
 
-VERSION = "2.3.0"
+VERSION = "2.3.1"
 MAX_PIXELS = 25_000_000
 MAX_DIM = 20_000
 MAX_REGIONS = 16
@@ -1495,6 +1495,23 @@ def process_group(group: Group, cross_size: int, out: Path, no_balance: bool,
         seam = warped[0].shape[array_axis]
         offset = np.float64([[1, 0, seam if direction == "horizontal" else 0],
                              [0, 1, seam if direction == "vertical" else 0], [0, 0, 1]])
+        # Transparency: adjacent views of ONE surface sit next to each other
+        # in the source frame. Widely separated quads mean the join claim
+        # rests entirely on the configuration (and may span two containers).
+        qa_abs = a.quad + np.float32(a.box[:2])
+        qb_abs = b.quad + np.float32(b.box[:2])
+        if direction == "horizontal":
+            quad_gap = float(qb_abs[:, 0].min() - qa_abs[:, 0].max())
+            view_span = max(a.image.shape[1], b.image.shape[1])
+        else:
+            quad_gap = float(qb_abs[:, 1].min() - qa_abs[:, 1].max())
+            view_span = max(a.image.shape[0], b.image.shape[0])
+        separation_warning = None
+        if quad_gap > max(12.0, 0.04 * view_span):
+            separation_warning = (
+                f"Configured regions are separated by {quad_gap:.0f} px of source frame; "
+                "adjacent views of one surface are expected to nearly touch. The same-surface "
+                "claim rests entirely on the configuration — verify this is one container, not two.")
         diagnostic = edge_diagnostic(a, b, out)
         out_w, out_h = image.shape[1], image.shape[0]
         seam_pts = ([[seam, 0], [seam, out_h - 1]] if direction == "horizontal"
@@ -1518,6 +1535,7 @@ def process_group(group: Group, cross_size: int, out: Path, no_balance: bool,
             seam_points=seam_pts, feather_px=fade or None,
             seam_alignment=alignment if alignment.get("enabled") else None,
             sanity={"overlap_verified": bool(strong_alignment),
+                    "quad_separation_px": round(quad_gap, 1),
                     "note": ("seam translation was feature-measured and applied within clamps"
                              if strong_alignment else
                              "edge adjacency is configured, not feature-proven")})
@@ -1532,6 +1550,8 @@ def process_group(group: Group, cross_size: int, out: Path, no_balance: bool,
             warnings = ["The seam was refined by a translation measured from pixels with limited feature "
                         "support; no overlap verification passed, so treat the output as unreviewed.",
                         "Repeated corrugations can alias the measurement by one period; review the seam visually."]
+        if separation_warning:
+            warnings.append(separation_warning)
         report = {"method": "edge", "status": status,
                   "overlap_alignment_applied": bool(alignment.get("applied")),
                   "independently_verified_overlap": False,

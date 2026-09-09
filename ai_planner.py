@@ -45,11 +45,18 @@ Inspect the photo and return ONLY one JSON object, no prose, matching this schem
 
 Rules:
 - All coordinates are normalized 0..1 relative to the FULL image; quad corner order is TL, TR, BR, BL.
+- COVERAGE: produce one containers[] group per DISTINCT physical container visible in the photo.
+  A frame with two visible containers MUST yield two groups (combo), each with its own regions.
+  Only leave a container out when it is genuinely unusable (fully occluded, out of frame, or a
+  duplicate of another view) — and then name it with the reason in exclude[]. The validator
+  rejects plans whose group count does not match scene.physical_containers minus recorded exclusions.
 - rectify: ONE view already shows the complete target surface. Preferred when a single view suffices.
 - edge: two adjacent views of the same surface, adjacency known, overlap NOT verified.
 - overlap: the SAME surface genuinely appears in both views with real shared coverage.
   Choose overlap ONLY when confidence.same_surface >= 0.85.
-- One container group per physical container. Never group different containers together.
+- One container group per physical container. Never group different containers together —
+  adjacent regions of ONE group must belong to the SAME container's surface, never span
+  two separate containers.
 - view_box_normalized should tightly bound the camera view you are using; quad_normalized must
   sit inside its view box and trace the target panel's corners as precisely you can.
 """
@@ -201,6 +208,26 @@ def validate_plan(plan: dict[str, Any]) -> None:
     containers = plan.get("containers")
     if not isinstance(containers, list) or not 1 <= len(containers) <= 8:
         raise ValueError("plan.containers must be a list of 1..8 groups")
+
+    # Coverage consistency: the planner's own scene count must match its
+    # grouping. A two-container scene planned as one group silently drops a
+    # container (or worse, spans two containers with one group); the retry
+    # loop gets this message with the diagnostics.
+    scene = plan.get("scene") or {}
+    visible = scene.get("physical_containers") if isinstance(scene, dict) else None
+    exclude = plan.get("exclude")
+    exclude = exclude if isinstance(exclude, list) else []
+    if isinstance(visible, int) and visible >= 1:
+        if len(containers) > visible:
+            raise ValueError(
+                f"coverage mismatch: {len(containers)} groups for a scene with "
+                f"{visible} physical container(s) — at most one group per container")
+        if len(containers) < visible and not any(str(e).strip() for e in exclude):
+            raise ValueError(
+                f"coverage mismatch: scene has {visible} physical container(s) but only "
+                f"{len(containers)} group(s) planned and exclude[] is empty — include every "
+                f"visible container, or name each left-out container with its reason in exclude[]")
+
     for c in containers:
         if not isinstance(c, dict):
             raise ValueError("plan container is not an object")
