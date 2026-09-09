@@ -5,12 +5,23 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Sign in — Container Stitch Tester</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: { extend: { colors: {
+        brand: { DEFAULT: '#2563eb', dark: '#1d4ed8' },
+        navy: '#0d1b2e',
+        card: '#ffffff',
+        ink: '#0f172a',
+        mute: '#64748b',
+      } } },
+    }
+  </script>
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
-<body class="bg-navy min-h-screen flex items-center justify-center p-4">
+<body class="bg-navy min-h-screen flex items-center justify-center p-4 font-sans">
   <div class="w-full max-w-sm">
     <div class="text-center mb-6">
-      <div class="w-14 h-14 mx-auto rounded-2xl bg-blue-600 flex items-center justify-center shadow-lg shadow-blue-600/30 mb-3">
+      <div class="w-14 h-14 mx-auto rounded-2xl bg-brand flex items-center justify-center shadow-lg shadow-blue-600/30 mb-3">
         <svg class="w-7 h-7 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
       </div>
       <h1 class="text-white font-bold text-lg">Container Stitch Tester</h1>
