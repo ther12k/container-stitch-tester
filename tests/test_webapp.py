@@ -171,5 +171,47 @@ class AiFailurePathTests(unittest.TestCase):
         self.assertTrue(entries and entries[0]["ok"] is False)
 
 
+class PublicExposureTests(unittest.TestCase):
+    """Guards for the hosted demo deployment (CST_PUBLIC=1)."""
+
+    def test_ssrf_guard_flags_private_endpoints(self):
+        import app as webapp
+        err = webapp._assert_public_ai_endpoints(
+            {"planner": {"base_url": "http://127.0.0.1:8000/v1", "model": "m"}})
+        self.assertIsNotNone(err)
+        self.assertIn("private", err)
+        err2 = webapp._assert_public_ai_endpoints(
+            {"planner": {"base_url": "http://localhost:9000/v1", "model": "m"}})
+        self.assertIsNotNone(err2)
+        self.assertIn("localhost", err2)
+
+    def test_ssrf_guard_allows_missing_reviewer(self):
+        import app as webapp
+        self.assertIsNone(webapp._assert_public_ai_endpoints(
+            {"planner": {"base_url": "", "model": ""}, "reviewer": {}}))
+
+    def test_run_custom_rejects_path_outside_uploads(self):
+        client = _client()
+        data = {"config_text": json.dumps({
+                    "schema_version": 1, "mode": "single", "height": 64,
+                    "sources": {"main": {"path": "../../../etc/passwd"}},
+                    "containers": []}),
+                "mode": ""}
+        resp = client.post("/run-custom", data=data, content_type="multipart/form-data")
+        page = resp.get_data(as_text=True)
+        self.assertIn("must stay inside the uploaded files folder", page)
+
+    def test_recipe_availability_filter(self):
+        import app as webapp
+        ok = webapp._BASE_EXAMPLE_RECIPES[0]
+        missing = dict(ok)
+        missing["config"] = ok["config"].parent / "no_such_recipe.json"
+        # The private bundle ships the sample photos; the public checkout does
+        # not, so the filter must agree with whichever environment it runs in.
+        expected = (webapp.BASE_DIR / "sources" / "single_grey.png").is_file()
+        self.assertEqual(webapp._recipe_available(ok), expected)
+        self.assertFalse(webapp._recipe_available(missing))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import copy
+import ipaddress
 import json
+import os
 import queue as queue_mod
 import shutil
+import socket
 import tempfile
 import threading
 import time
@@ -62,7 +65,7 @@ DEFAULT_CONFIG_TEMPLATE = """{
   ]
 }"""
 
-EXAMPLE_RECIPES = [
+_BASE_EXAMPLE_RECIPES = [
     {
         "key": "single_grey",
         "label": "Grey single container (horizontal edge join)",
@@ -120,6 +123,62 @@ EXAMPLE_RECIPES = [
         "kind": "batch",
     },
 ]
+def _recipe_available(item: dict) -> bool:
+    """True when every source file the recipe needs is actually present.
+
+    The public deployment ships without the private sample photographs; those
+    recipes are hidden instead of failing at run time. Demo recipes generated
+    by demo_seed.py (containers) are always available."""
+    try:
+        cfg = json.loads(item["config"].read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    if item.get("kind") == "batch":
+        try:
+            names = [j["config"] for j in cfg.get("jobs", [])]
+        except Exception:
+            return False
+        paths = [item["config"].parent / n for n in names]
+    else:
+        paths = [item["config"]]
+    for path in paths:
+        try:
+            job_cfg = json.loads(path.read_text(encoding="utf-8"))
+            for info in (job_cfg.get("sources") or {}).values():
+                if not (path.parent / info.get("path", "")).resolve().is_file():
+                    return False
+        except Exception:
+            return False
+    return True
+
+
+_DEMO_LABELS = {
+    "demo_horizontal": ("Demo — synthetic side view (horizontal edge join)", "Demo side"),
+    "demo_vertical": ("Demo — synthetic roof (vertical edge join)", "Demo roof"),
+    "demo_rectify": ("Demo — synthetic single view (rectify)", "Demo rectify"),
+}
+
+
+def _demo_recipes() -> list[dict]:
+    """Example entries for seeded synthetic demo samples (demo_seed.py)."""
+    recipes = []
+    for cfg_path in sorted((BASE_DIR / "configs").glob("demo_*.json")):
+        try:
+            json.loads(cfg_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        label, short = _DEMO_LABELS.get(cfg_path.stem, (cfg_path.stem, cfg_path.stem))
+        recipes.append({
+            "key": cfg_path.stem,
+            "label": label,
+            "short": short,
+            "config": cfg_path,
+            "kind": "job",
+        })
+    return recipes
+
+
+EXAMPLE_RECIPES = [r for r in _BASE_EXAMPLE_RECIPES if _recipe_available(r)] + _demo_recipes()
 EXAMPLE_BY_KEY = {item["key"]: item for item in EXAMPLE_RECIPES}
 
 
@@ -151,9 +210,29 @@ DOCS = {
 }
 
 
+def _sweep_old_jobs(ttl_seconds: float, interval_seconds: float = 3600) -> None:
+    """Background retention: delete job/upload dirs older than the TTL.
+
+    A public tester otherwise grows web_jobs/ without bound."""
+    while True:
+        cutoff = time.time() - ttl_seconds
+        for base in (JOBS_DIR, UPLOADS_DIR):
+            for path in base.iterdir():
+                try:
+                    if path.is_dir() and path.stat().st_mtime < cutoff:
+                        shutil.rmtree(path, ignore_errors=True)
+                except OSError:
+                    pass
+        time.sleep(interval_seconds)
+
+
 def create_app() -> Flask:
     app = Flask(__name__)
-    app.config["MAX_CONTENT_LENGTH"] = 512 * 1024 * 1024
+    # 64 MB covers a multi-photo custom run; larger bodies get a 413.
+    app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024
+    app.config["CST_PUBLIC"] = os.environ.get("CST_PUBLIC", "") == "1"
+    if app.config["CST_PUBLIC"]:
+        threading.Thread(target=_sweep_old_jobs, args=(7 * 24 * 3600,), daemon=True).start()
 
     @app.get("/")
     def index() -> str:
@@ -289,6 +368,23 @@ def create_app() -> Flask:
                     staged += 1
             if staged:
                 emit("ok", f"staged {staged} uploaded image(s) next to the config")
+
+            # Path jail: a custom config may only reference files staged inside
+            # this run's upload folder — never arbitrary server paths.
+            try:
+                jailed = json.loads(config_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                jailed = {}
+            for name, info in (jailed.get("sources") or {}).items():
+                rel = info.get("path") if isinstance(info, dict) else None
+                if not isinstance(rel, str) or not rel:
+                    continue
+                resolved = (work_dir / rel).resolve()
+                if work_dir.resolve() not in resolved.parents and resolved.parent != work_dir.resolve():
+                    msg = (f"Source '{name}' path must stay inside the uploaded files folder "
+                           f"(got '{rel}'). Upload the image alongside the config instead.")
+                    emit("error", msg)
+                    return render_result_error(msg)
 
             if run_as_batch and mode == "auto":
                 raise ProcessingError("Auto mode (try single + combo) applies to single-job configs, not batch manifests.")
@@ -476,6 +572,11 @@ def create_app() -> Flask:
             return render_result_error("AI planning needs a planner endpoint and model — open ⚙ AI settings.")
         reviewer = settings.get("reviewer") or {}
         has_reviewer = bool(reviewer.get("base_url") and reviewer.get("model"))
+        if app.config.get("CST_PUBLIC"):
+            guard_error = _assert_public_ai_endpoints(settings)
+            if guard_error:
+                emit("error", guard_error)
+                return render_result_error(guard_error)
         try:
             max_attempts = max(1, min(int(settings.get("max_attempts", 3)), 4))
         except (TypeError, ValueError):
@@ -806,6 +907,41 @@ def create_app() -> Flask:
 
 def _noop_emit(stage, message):
     pass
+
+
+def _assert_public_ai_endpoints(settings: dict) -> str | None:
+    """Public deployments refuse AI endpoints on private networks (SSRF guard).
+
+    Returns a user-facing error message, or None when every configured
+    endpoint resolves to a public address. Disabled locally (CST_PUBLIC)."""
+    import urllib.parse
+
+    def check(provider: str, role: str) -> str | None:
+        base = (provider or {}).get("base_url") or ""
+        if not base:
+            return None
+        parsed = urllib.parse.urlparse(base if "//" in base else f"https://{base}")
+        host = parsed.hostname or ""
+        if host in ("localhost",) or host.endswith(".localhost"):
+            return f"{role} endpoint must be a public https URL, not localhost."
+        try:
+            infos = socket.getaddrinfo(host, parsed.port or 443, proto=socket.IPPROTO_TCP)
+        except socket.gaierror:
+            return f"{role} endpoint host '{host}' does not resolve."
+        for info in infos:
+            ip = ipaddress.ip_address(info[4][0])
+            if not ip.is_global:
+                return (f"{role} endpoint '{host}' resolves to a private address ({ip}); "
+                        "public deployments only call public AI endpoints.")
+        return None
+
+    for provider, role in ((settings.get("planner"), "Planner"),
+                           (settings.get("reviewer"), "Reviewer")):
+        if provider and provider.get("base_url"):
+            err = check(provider, role)
+            if err:
+                return err
+    return None
 
 
 def _materialize_files(multi_items) -> tuple[dict[str, list[dict]], Path]:

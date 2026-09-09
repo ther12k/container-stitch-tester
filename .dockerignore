@@ -1,0 +1,13 @@
+.git
+.github
+.githooks
+.gitignore
+.gitleaks.toml
+__pycache__/
+*/__pycache__/
+tests/
+web_jobs/
+web_uploads/
+*.tar
+*.md
+.githooks/local-banned.txt
