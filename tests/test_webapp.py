@@ -231,7 +231,9 @@ class PublicExposureTests(unittest.TestCase):
         client = application.test_client()
         resp = client.get("/example-thumb/demo_horizontal")
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.mimetype, "image/png")
+        self.assertEqual(resp.mimetype, "image/jpeg")
+        # Downscaled preview, not the multi-megabyte source.
+        self.assertLess(len(resp.data), 300_000)
 
     def test_example_thumb_unknown_key_404(self):
         import app as webapp

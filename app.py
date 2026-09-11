@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import ipaddress
+import io
 import json
 import os
 import queue as queue_mod
@@ -12,9 +13,11 @@ import tempfile
 import threading
 import time
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from uuid import uuid4
 
+import cv2
 from flask import Flask, Response, abort, render_template, request, send_file, url_for
 
 from container_stitch import ProcessingError, VERSION, run_batch, run_job
@@ -123,6 +126,23 @@ _BASE_EXAMPLE_RECIPES = [
         "kind": "batch",
     },
 ]
+THUMB_MAX_WIDTH = 480
+
+
+@lru_cache(maxsize=32)
+def _thumb_jpeg(path_str: str, mtime_ns: int) -> bytes | None:
+    """Downscaled JPEG preview, keyed by source path + mtime so edits bust it."""
+    img = cv2.imread(path_str, cv2.IMREAD_COLOR)
+    if img is None:
+        return None
+    height, width = img.shape[:2]
+    if width > THUMB_MAX_WIDTH:
+        size = (THUMB_MAX_WIDTH, max(1, round(height * THUMB_MAX_WIDTH / width)))
+        img = cv2.resize(img, size, interpolation=cv2.INTER_AREA)
+    ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
+    return buf.tobytes() if ok else None
+
+
 def _recipe_available(item: dict) -> bool:
     """True when every source file the recipe needs is actually present.
 
@@ -924,7 +944,12 @@ def create_app() -> Flask:
                 thumb = None
             if thumb is None:
                 abort(404)
-        return send_file(thumb, mimetype="image/png")
+        data = _thumb_jpeg(str(thumb), thumb.stat().st_mtime_ns)
+        if data is None:
+            abort(404)
+        resp = send_file(io.BytesIO(data), mimetype="image/jpeg")
+        resp.headers["Cache-Control"] = "public, max-age=86400"
+        return resp
 
     @app.get("/api/ai-defaults")
     def api_ai_defaults() -> Response:

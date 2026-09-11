@@ -24,7 +24,9 @@ import container_stitch as cs
 
 # The original sample photographs (sources/, examples/) are not distributed with
 # this repository; tests that exercise the packaged recipes skip gracefully.
-PRIVATE_BUNDLE = (ROOT / 'sources').is_dir()
+# Probe a file only the private bundle has: the seeded demo samples also live
+# in sources/ during public test runs, so directory existence is not enough.
+PRIVATE_BUNDLE = (ROOT / 'sources' / 'single_grey.png').is_file()
 
 
 class UnifiedTests(unittest.TestCase):

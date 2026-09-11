@@ -20,8 +20,9 @@ import container_stitch as cs
 
 # Tests further down use the real roof recipes; skip the class when the private
 # sample bundle is absent (the synthetic-fixture tests remain available in the
-# private checkout).
-PRIVATE_BUNDLE = (ROOT / 'sources').is_dir()
+# private checkout). Probe a file only the private bundle has: the seeded demo
+# samples also create sources/ during public test runs.
+PRIVATE_BUNDLE = (ROOT / 'sources' / 'single_grey.png').is_file()
 
 
 class VerticalTests(unittest.TestCase):
