@@ -5,3 +5,5 @@ web_uploads/
 *.pyc
 .work-*/
 .githooks/local-banned.txt
+sources/
+configs/demo_*.json

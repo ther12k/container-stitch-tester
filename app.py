@@ -910,7 +910,20 @@ def create_app() -> Flask:
             abort(404)
         thumb = example["config"].parent.parent / "examples" / key / "result.png"
         if not thumb.is_file():
-            abort(404)
+            # Seeded demo recipes ship a source image but no precomputed
+            # examples/<key>/result.png; fall back to their main source.
+            thumb = None
+            try:
+                cfg = json.loads(example["config"].read_text(encoding="utf-8"))
+                src = str((cfg.get("sources") or {}).get("main", {}).get("path", ""))
+                if src:
+                    candidate = (example["config"].parent / src).resolve()
+                    if candidate.is_file() and BASE_DIR in candidate.parents:
+                        thumb = candidate
+            except (OSError, ValueError):
+                thumb = None
+            if thumb is None:
+                abort(404)
         return send_file(thumb, mimetype="image/png")
 
     @app.get("/api/ai-defaults")

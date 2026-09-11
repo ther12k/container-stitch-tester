@@ -213,6 +213,33 @@ class PublicExposureTests(unittest.TestCase):
         self.assertEqual(webapp._recipe_available(ok), expected)
         self.assertFalse(webapp._recipe_available(missing))
 
+    def test_example_thumb_falls_back_to_demo_source(self):
+        """Seeded demo recipes have no examples/<key>/result.png; the thumb
+        endpoint must serve their main source instead of 404."""
+        import app as webapp
+        demo_cfg = webapp.BASE_DIR / "configs" / "demo_horizontal.json"
+        if not demo_cfg.is_file():
+            self.skipTest("demo seed not generated in this environment")
+        source = webapp.BASE_DIR / "sources" / "demo_horizontal.png"
+        if not source.is_file():
+            # Public checkouts ship the deterministic seeder; Docker images
+            # run it at build time. Generate the same pixels either way.
+            import demo_seed
+            demo_seed.main()
+        application = webapp.create_app()
+        application.config["TESTING"] = True
+        client = application.test_client()
+        resp = client.get("/example-thumb/demo_horizontal")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.mimetype, "image/png")
+
+    def test_example_thumb_unknown_key_404(self):
+        import app as webapp
+        application = webapp.create_app()
+        application.config["TESTING"] = True
+        client = application.test_client()
+        self.assertEqual(client.get("/example-thumb/no_such_demo").status_code, 404)
+
 
 class AuthTests(unittest.TestCase):
     """Password gate (CST_PASSWORD) — deployed instances require a login."""
