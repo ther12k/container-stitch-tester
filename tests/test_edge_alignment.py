@@ -217,6 +217,51 @@ class DirectionHintTests(unittest.TestCase):
         self.assertEqual(config["direction_basis"], "inferred_from_input_layout")
         self.assertTrue(any("auto-resolved" in w for w in warnings), warnings)
 
+    def test_resolved_auto_config_rerun_keeps_inferred_basis(self):
+        """Serialization and reloading must not fabricate operator intent:
+        rerunning a resolved auto job keeps direction_basis inferred."""
+        cfg_path = self._config("auto.json", stacked=True)
+        cfg = json.loads(cfg_path.read_text())
+        cfg["direction"] = "auto"
+        cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+        out1 = self.base / "out1"
+        cs.run_job(cfg_path, out1)
+        first = json.loads((out1 / "report.json").read_text())
+        self.assertEqual(first["direction_basis"], "inferred_from_input_layout")
+        resolved = json.loads((out1 / "resolved_config.json").read_text())
+        self.assertEqual(resolved["direction"], first["direction"])
+        out2 = self.base / "out2"
+        cs.run_job(out1 / "resolved_config.json", out2)
+        rerun = json.loads((out2 / "report.json").read_text())
+        self.assertEqual(rerun["direction"], first["direction"])
+        self.assertEqual(rerun["direction_basis"], "inferred_from_input_layout")
+
+    def test_cleared_basis_rebasels_to_explicit(self):
+        """A genuine user override re-basels provenance: clearing the field
+        makes the direction operator-asserted again."""
+        cfg_path = self._config("auto.json", stacked=True)
+        cfg = json.loads(cfg_path.read_text())
+        cfg["direction"] = "auto"
+        cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+        out1 = self.base / "out1"
+        cs.run_job(cfg_path, out1)
+        resolved = json.loads((out1 / "resolved_config.json").read_text())
+        resolved.pop("direction_basis")
+        override = self.base / "override.json"
+        override.write_text(json.dumps(resolved), encoding="utf-8")
+        out2 = self.base / "out2"
+        cs.run_job(override, out2)
+        rerun = json.loads((out2 / "report.json").read_text())
+        self.assertEqual(rerun["direction_basis"], "explicit_recipe")
+
+    def test_unknown_basis_value_rejected(self):
+        cfg_path = self._config("side.json", stacked=False)
+        cfg = json.loads(cfg_path.read_text())
+        cfg["direction_basis"] = "magic"
+        cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+        with self.assertRaises(cs.ProcessingError):
+            cs.load_job(cfg_path)
+
 
 class EdgeAlignmentJobTests(unittest.TestCase):
     def setUp(self):

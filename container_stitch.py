@@ -376,6 +376,9 @@ def load_job(config_path: Path, mode: str | None = None, input_path: Path | None
     if requested_direction not in ("horizontal", "vertical", "auto"):
         raise ProcessingError("direction must be horizontal, vertical, or auto.")
     view_hint = direction_hint_from_view_boxes(config)
+    known_bases = ("explicit_recipe", "inferred_from_input_layout")
+    if "direction_basis" in config and config["direction_basis"] not in known_bases:
+        raise ProcessingError("direction_basis must be explicit_recipe or inferred_from_input_layout.")
     if requested_direction == "auto":
         if view_hint is None:
             raise ProcessingError("direction:auto is ambiguous for these regions. Set horizontal or vertical explicitly.")
@@ -385,7 +388,12 @@ def load_job(config_path: Path, mode: str | None = None, input_path: Path | None
                         "The physical stitch axis is NOT independently verified.")
     else:
         config["direction"] = requested_direction
-        config["direction_basis"] = "explicit_recipe"
+        # Provenance must survive reruns: a serialized direction is not
+        # evidence that an operator chose it, so a resolved config keeps its
+        # original basis. Fresh recipes carry no basis and derive
+        # explicit_recipe here; overriding a resolved config re-basels only
+        # when the operator clears the field.
+        config.setdefault("direction_basis", "explicit_recipe")
         if view_hint is not None and view_hint != requested_direction:
             # View-box arrangement describes how panels were packaged into the
             # uploaded image, not the physical stitch axis; an explicit
