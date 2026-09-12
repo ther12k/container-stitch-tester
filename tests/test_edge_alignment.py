@@ -93,6 +93,8 @@ class MeasureStripAlignmentTests(unittest.TestCase):
         self.assertAlmostEqual(m["cross_offset_px"], -8, delta=3)
         self.assertGreaterEqual(m["inliers"], 12)
         self.assertLessEqual(m["median_reprojection_error_px"], 2.0)
+        # Acceptance is scored under the rendered trim+shift transform.
+        self.assertLessEqual(m["rendered_translation_error_px"], 2.0)
         self.assertEqual(m["trim_px"], max(0, m["measured_overlap_px"]))
         self.assertTrue(m["promotion_candidate"])  # overlap clearly present
 
@@ -100,8 +102,54 @@ class MeasureStripAlignmentTests(unittest.TestCase):
         m = cs.measure_strip_alignment(self.a, self.va, self.b, self.vb, "horizontal")
         b2, vb2 = cs._realigned_strip(self.b, self.vb, m, "horizontal")
         self.assertEqual(b2.shape[1], self.b.shape[1] - m["trim_px"])
-        # valid pixels shifted up by the cross offset; nothing invented below
-        self.assertLess(int(vb2[-1].sum()), int(self.vb[-1].sum()))
+        # shift -8 -> canvas grows by 8 (the caller pads strip A to match);
+        # every valid pixel that survives the deliberate overlap trim is kept.
+        self.assertEqual(b2.shape[0], self.b.shape[0] + 8)
+        self.assertEqual(int(vb2.sum()), int(self.vb[:, m["trim_px"]:].sum()))
+        self.assertTrue(bool(vb2.sum()))
+
+    def test_realigned_strip_preserves_unique_content(self):
+        # A marker filling the bottom ten rows survives a +10 px cross shift:
+        # the canvas grows instead of clipping content off the far edge.
+        marked = np.zeros((100, 100, 3), np.float32)
+        marked[-10:, :, 2] = 255
+        valid = np.ones((100, 100), bool)
+        for direction, axis in (("horizontal", 0), ("vertical", 1)):
+            moved, mv = cs._realigned_strip(
+                marked.copy(), valid.copy(), {"trim_px": 0, "shift_px": 10}, direction)
+            self.assertEqual(moved.shape[axis], 110, direction)
+            self.assertEqual(int(np.count_nonzero(moved[..., 2] > 0)), 1000, direction)
+            self.assertEqual(int(mv.sum()), 10_000, direction)
+
+    def test_fractional_shift_is_quantized_without_darkening(self):
+        white = np.full((32, 32, 3), 255.0, np.float32)
+        valid = np.ones((32, 32), bool)
+        for direction in ("horizontal", "vertical"):
+            moved, mv = cs._realigned_strip(
+                white.copy(), valid.copy(), {"trim_px": 0, "shift_px": 1.25}, direction)
+            self.assertEqual(moved.shape[0 if direction == "horizontal" else 1], 33, direction)
+            self.assertEqual(float(moved[mv].min()), 255.0, direction)
+
+    def test_scale_mismatch_declines_translation_correction(self):
+        # Known B->A relationship includes 10% scale: the similarity fit is
+        # excellent, but the translation-only render path cannot honour it, so
+        # the correction must be declined instead of scored on the fitted model.
+        rng = np.random.default_rng(8743)
+        world = cv2.GaussianBlur(
+            rng.integers(0, 256, (640, 850, 3), dtype=np.uint8), (3, 3), 0.8)
+        a = world[:, :400]
+        b = cv2.warpAffine(world, np.float32([[1 / 1.1, 0, -377 / 1.1], [0, 1 / 1.1, 0]]),
+                           (400, 640))
+        valid = np.ones(a.shape[:2], bool)
+        m = cs.measure_strip_alignment(
+            a.astype(np.float32), valid, b.astype(np.float32), np.ones(b.shape[:2], bool),
+            "horizontal")
+        self.assertFalse(m["applied"], m)
+        self.assertGreater(m["scale_measured"], 1.05)
+        self.assertFalse(m["sanity_checks"]["rendered_error"])
+        self.assertGreater(m["rendered_translation_error_px"], 2.0)
+        self.assertIn("model_mismatch_note", m)
+        self.assertNotIn("trim_px", m)
 
     def test_flat_strips_are_refused(self):
         flat = np.zeros((300, 600, 3), np.uint8)
@@ -110,6 +158,59 @@ class MeasureStripAlignmentTests(unittest.TestCase):
         self.assertFalse(m["applied"])
         self.assertFalse(m.get("promotion_candidate", False))
         self.assertIn("reason", m)
+
+
+class DirectionHintTests(unittest.TestCase):
+    """Repacking identical views into a different collage layout must not
+    change their physical stitching interpretation: an explicit direction is
+    the operator's physical claim and overrides the input-packaging hint."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.base = Path(self.tmp.name)
+        cs.save_image(self.base / "input.png", textured_plane(13, 800, 400))
+
+    def _config(self, name: str, stacked: bool) -> Path:
+        boxes = ([(0, 0, 800, 200), (0, 200, 800, 400)] if stacked
+                 else [(0, 0, 400, 400), (400, 0, 800, 400)])
+        regions = [
+            {"source": "main", "view_box": [x0, y0, x1, y1],
+             "quad": [[4, 4], [x1 - x0 - 4, 4], [x1 - x0 - 4, y1 - y0 - 4], [4, y1 - y0 - 4]]}
+            for x0, y0, x1, y1 in boxes
+        ]
+        cfg = {
+            "schema_version": 2, "mode": "single", "direction": "horizontal",
+            "cross_size_px": 200,
+            "sources": {"main": {"path": "input.png", "expected_size_wh": [800, 400]}},
+            "containers": [{
+                "key": "container_1", "method": "edge", "same_surface_confirmed": True,
+                "regions": regions,
+            }],
+        }
+        path = self.base / name
+        path.write_text(json.dumps(cfg), encoding="utf-8")
+        return path
+
+    def test_explicit_direction_wins_over_packaging(self):
+        # The same two views, stacked in the uploaded image: the hint says
+        # vertical, the recipe says horizontal. Formerly a hard rejection.
+        config, _, _, _, warnings = cs.load_job(self._config("stacked.json", stacked=True))
+        self.assertEqual(config["direction"], "horizontal")
+        self.assertTrue(any("packaging" in w for w in warnings), warnings)
+
+    def test_matching_packaging_stays_warning_free(self):
+        config, _, _, _, warnings = cs.load_job(self._config("side.json", stacked=False))
+        self.assertEqual(config["direction"], "horizontal")
+        self.assertFalse(any("packaging" in w for w in warnings), warnings)
+
+    def test_auto_still_resolves_from_layout(self):
+        cfg_path = self._config("auto.json", stacked=True)
+        cfg = json.loads(cfg_path.read_text())
+        cfg["direction"] = "auto"
+        cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+        config, _, _, _, warnings = cs.load_job(cfg_path)
+        self.assertEqual(config["direction"], "vertical")
+        self.assertTrue(any("auto-resolved" in w for w in warnings), warnings)
 
 
 class EdgeAlignmentJobTests(unittest.TestCase):

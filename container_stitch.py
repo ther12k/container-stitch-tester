@@ -35,7 +35,7 @@ from typing import Any
 import cv2
 import numpy as np
 
-VERSION = "2.3.1"
+VERSION = "2.3.2"
 MAX_PIXELS = 25_000_000
 MAX_DIM = 20_000
 MAX_REGIONS = 16
@@ -384,11 +384,13 @@ def load_job(config_path: Path, mode: str | None = None, input_path: Path | None
     else:
         config["direction"] = requested_direction
         if view_hint is not None and view_hint != requested_direction:
-            raise ProcessingError(
-                f"Direction mismatch: selected view boxes are clearly {view_hint}ly arranged, "
-                f"but the recipe says {requested_direction}. Refusing to create a misleading composite.",
-                {"configured_direction": requested_direction, "view_box_direction_hint": view_hint},
-            )
+            # View-box arrangement describes how panels were packaged into the
+            # uploaded image, not the physical stitch axis; an explicit
+            # direction is the operator's physical claim and wins.
+            warnings.append(
+                f"View boxes are {view_hint}ly arranged in the input image, but the recipe says "
+                f"{requested_direction}. Input packaging does not prove the physical stitch axis; "
+                f"using the explicit direction '{requested_direction}'.")
     if direction is not None and direction != config["direction"]:
         raise ProcessingError("CLI direction conflicts with resolved configuration direction; refusing to reinterpret corners.")
     config["layout"] = config.get("layout", config["direction"])
@@ -622,8 +624,11 @@ def measure_strip_alignment(a: np.ndarray, va: np.ndarray, b: np.ndarray, vb: np
     SIFT + mutual ratio-test matches + RANSAC similarity, entirely on the
     already-rectified strips: same pixels in, same numbers out. Decides
     whether a clamped translation correction is supportable; applying it is
-    the caller's decision. This is a measured refinement of declared corners,
-    not an independent verification of container identity.
+    the caller's decision. Acceptance is scored under the EXACT translation
+    the renderer will apply (trim + quantized cross shift) — a good similarity
+    fit alone never approves a correction its own scale/rotation terms forbid.
+    This is a measured refinement of declared corners, not an independent
+    verification of container identity.
     """
     clamp = SEAM_ALIGN_CLAMP
     out: dict[str, Any] = {"enabled": True, "applied": False, "direction": direction,
@@ -690,33 +695,50 @@ def measure_strip_alignment(a: np.ndarray, va: np.ndarray, b: np.ndarray, vb: np
     h_a, w_a = a.shape[:2]
     h_b, w_b = b.shape[:2]
     pts_b = src.reshape(-1, 2)[inlier]
+    pts_a = dst.reshape(-1, 2)[inlier]
     if direction == "horizontal":
-        along, cross = w_a - tx, ty
+        along = w_a - tx
         spread_pts = pts_b[:, 1]
         spread_ref, limit_ref = float(h_b), float(h_a)
+        # Direct translation fit for the cross axis: this — not the similarity
+        # model's ty — is the offset the renderer will actually apply.
+        cross_fit = float(np.median(pts_a[:, 1] - pts_b[:, 1]))
     else:
-        along, cross = h_a - ty, tx
+        along = h_a - ty
         spread_pts = pts_b[:, 0]
         spread_ref, limit_ref = float(w_b), float(w_a)
+        cross_fit = float(np.median(pts_a[:, 0] - pts_b[:, 0]))
     spread = float(spread_pts.max() - spread_pts.min()) if len(spread_pts) else 0.0
     out["measured_overlap_px"] = int(round(along))
-    out["cross_offset_px"] = round(cross, 2)
+    out["cross_offset_px"] = round(cross_fit, 2)
     out["inlier_spread_px"] = round(spread, 1)
+    # Score the EXACT transform the renderer will apply — trim + quantized
+    # cross translation only. A similarity fit can look perfect while its
+    # scale/rotation terms are silently discarded by the render path; residuals
+    # must be measured under the rendered model, or acceptance is meaningless.
+    trim = max(0, int(round(along)))
+    shift_applied = int(round(cross_fit)) if abs(cross_fit) >= 0.5 else 0
+    t_render = (np.float64([w_a - trim, shift_applied]) if direction == "horizontal"
+                else np.float64([shift_applied, h_a - trim]))
+    rendered_err = float(np.median(np.linalg.norm(pts_a - (pts_b + t_render), axis=1)))
+    out["rendered_translation_error_px"] = round(rendered_err, 2)
     strip_len = w_b if direction == "horizontal" else h_b
     gates = {
         "min_inliers": out["inliers"] >= clamp["min_inliers"],
         "median_error": median_err <= clamp["max_median_error_px"],
+        "rendered_error": rendered_err <= clamp["max_median_error_px"],
         "scale_bounds": clamp["scale_range"][0] <= scale <= clamp["scale_range"][1],
         "rotation_bounds": abs(rotation) <= clamp["max_rotation_deg"],
         "overlap_bounds": (-clamp["max_measured_gap_px"]
                            <= along <= clamp["max_overlap_fraction"] * (w_b if direction == "horizontal" else h_b)),
-        "cross_offset_bounds": abs(cross) <= clamp["max_cross_offset_fraction"] * limit_ref,
+        "cross_offset_bounds": abs(cross_fit) <= clamp["max_cross_offset_fraction"] * limit_ref,
     }
     out["sanity_checks"] = gates
     # "strong" requires inliers that span the strip, not just one feature band
-    # (e.g. lettering); only strong evidence upgrades the quality state.
+    # (e.g. lettering), and accuracy under the rendered transform — only strong
+    # evidence upgrades the quality state.
     out["strong"] = bool(out["inliers"] >= clamp["strong_inliers"]
-                         and median_err <= clamp["max_median_error_px"]
+                         and rendered_err <= clamp["max_median_error_px"]
                          and spread >= clamp["min_spread_fraction"] * spread_ref)
     out["inlier_spread_note"] = (
         "inliers concentrate in a narrow band; the translation is well-evidenced there but "
@@ -724,7 +746,9 @@ def measure_strip_alignment(a: np.ndarray, va: np.ndarray, b: np.ndarray, vb: np
         else "inliers span the strip height")
     # Overlap candidate: the strips demonstrably share coverage, so the
     # verified overlap method (with its own fixed proof standards) may accept
-    # this pair even when the translation-only evidence is thin.
+    # this pair even when the translation-only evidence is thin. Promotion is
+    # gated on the FITTED model because the overlap method applies that full
+    # transform — scoring it here against the similarity is correct for that path.
     out["promotion_candidate"] = bool(
         len(good) >= clamp["max_candidates"]
         and median_err <= clamp["max_promotion_median_error_px"]
@@ -733,43 +757,50 @@ def measure_strip_alignment(a: np.ndarray, va: np.ndarray, b: np.ndarray, vb: np
         and along >= max(clamp["min_promotion_overlap_px"], 0.08 * strip_len))
     failed = [name for name, ok in gates.items() if not ok]
     if failed:
+        if "rendered_error" in failed and "median_error" not in failed:
+            out["model_mismatch_note"] = (
+                f"the fitted similarity (scale {scale:.3f}, rotation {rotation:.2f} deg) is not "
+                "consistent with the translation-only correction that would be applied; "
+                "residuals are scored under the rendered transform")
         out["reason"] = ("measured geometry outside clamps: " + ", ".join(failed)
                          if not out["promotion_candidate"] else
                          "translation refinement declined; overlap promotion is the better fix")
         return out
     out["applied"] = True
-    out["trim_px"] = max(0, int(round(along)))
-    out["shift_px"] = round(cross, 2)
-    out["warning"] = ("Correction is measured from pixels; repeated corrugations can alias by one "
-                      "period. Visual review of the seam is still required.")
+    out["trim_px"] = trim
+    out["shift_px"] = shift_applied
+    out["warning"] = ("Correction is measured from pixels and re-scored under the exact "
+                      "translation-only transform that was applied; repeated corrugations can "
+                      "alias by one period. Visual review of the seam is still required.")
     return out
 
 
 def _realigned_strip(b: np.ndarray, vb: np.ndarray, alignment: dict[str, Any],
                      direction: str) -> tuple[np.ndarray, np.ndarray]:
-    """Trim the measured overlap and apply the clamped cross-axis shift."""
+    """Trim the measured overlap and apply the clamped cross-axis shift.
+
+    Coverage policy: the cross shift is quantized to whole pixels and applied
+    by growing the strip canvas — no interpolation (so no bilinear darkening
+    of valid pixels) and no clipping (unique content is never discarded).
+    The caller must pad the opposite strip by |shift_px| along the cross axis
+    on the complementary side before concatenating.
+    """
     trim = alignment["trim_px"]
-    shift = float(alignment["shift_px"])
+    shift = int(round(float(alignment["shift_px"])))
     if direction == "horizontal":
         if trim > 0:
             b, vb = b[:, trim:], vb[:, trim:]
-        if abs(shift) >= 0.5:
-            h, w = b.shape[:2]
-            model = np.float32([[1, 0, 0], [0, 1, shift]])
-            b = cv2.warpAffine(b, model, (w, h), flags=cv2.INTER_LINEAR,
-                               borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-            vb = cv2.warpAffine(vb.astype(np.uint8), model, (w, h),
-                                flags=cv2.INTER_NEAREST, borderValue=0).astype(bool)
+        if shift:
+            before, after = max(shift, 0), max(-shift, 0)
+            b = np.pad(b, ((before, after), (0, 0), (0, 0)))
+            vb = np.pad(vb, ((before, after), (0, 0)), constant_values=False)
     else:
         if trim > 0:
             b, vb = b[trim:, :], vb[trim:, :]
-        if abs(shift) >= 0.5:
-            h, w = b.shape[:2]
-            model = np.float32([[1, 0, shift], [0, 1, 0]])
-            b = cv2.warpAffine(b, model, (w, h), flags=cv2.INTER_LINEAR,
-                               borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-            vb = cv2.warpAffine(vb.astype(np.uint8), model, (w, h),
-                                flags=cv2.INTER_NEAREST, borderValue=0).astype(bool)
+        if shift:
+            before, after = max(shift, 0), max(-shift, 0)
+            b = np.pad(b, ((0, 0), (before, after), (0, 0)))
+            vb = np.pad(vb, ((0, 0), (before, after)), constant_values=False)
     return b, vb
 
 
@@ -1459,6 +1490,19 @@ def process_group(group: Group, cross_size: int, out: Path, no_balance: bool,
                 alignment["promotion_rejected"] = str(exc)[:200]
         if alignment.get("applied"):
             warped[1], valids[1] = _realigned_strip(warped[1], valids[1], alignment, direction)
+            # The shifted strip grew by |shift| along the cross axis; pad the
+            # other strip on the complementary side so both contents stay
+            # co-aligned and nothing is cropped away.
+            shift = int(round(float(alignment["shift_px"])))
+            if shift:
+                before, after = max(-shift, 0), max(shift, 0)
+                widths3 = ((before, after), (0, 0), (0, 0)) if direction == "horizontal" \
+                    else ((0, 0), (before, after), (0, 0))
+                widths1 = ((before, after), (0, 0)) if direction == "horizontal" \
+                    else ((0, 0), (before, after))
+                warped[0] = np.pad(warped[0], widths3)
+                valids[0] = np.pad(valids[0], widths1, constant_values=False)
+                alignment["cross_pad_px"] = [before, after]
     array_axis = 0 if direction == "vertical" else 1
     output_length = sum(p.shape[array_axis] for p in warped)
     check_size(cross_size, output_length) if direction == "vertical" else check_size(output_length, cross_size)
@@ -1543,13 +1587,19 @@ def process_group(group: Group, cross_size: int, out: Path, no_balance: bool,
                     "Physical proportions, surface continuity and corrugation count at the seam are unverified.",
                     "Exposure balancing assumes comparable paint and can alter appearance near the seam."]
         if strong_alignment:
-            warnings = ["The seam position and cross-axis offset were measured from pixels (SIFT + RANSAC) "
-                        "and applied within tight clamps; declared corners were refined, not replaced.",
+            warnings = ["The seam position and cross-axis offset were measured from pixels (SIFT + RANSAC), "
+                        "re-scored under the exact translation-only correction that was applied, and stayed "
+                        "within tight clamps; declared corners were refined, not replaced.",
                         "Repeated corrugations can alias the measurement by one period; review the seam visually."]
         elif alignment.get("applied"):
             warnings = ["The seam was refined by a translation measured from pixels with limited feature "
                         "support; no overlap verification passed, so treat the output as unreviewed.",
                         "Repeated corrugations can alias the measurement by one period; review the seam visually."]
+        pad_px = alignment.get("cross_pad_px") or [0, 0]
+        if alignment.get("applied") and any(pad_px):
+            warnings.append(
+                f"The cross-axis correction expanded the output by {sum(pad_px)} px instead of cropping; "
+                "padded bands are transparent and no source content was discarded.")
         if separation_warning:
             warnings.append(separation_warning)
         report = {"method": "edge", "status": status,
