@@ -162,9 +162,10 @@
         {% endif %}
 
         <!-- Metadata chips -->
-        <div class="grid grid-cols-4 gap-1.5 mt-2">
+        <div class="grid grid-cols-5 gap-1.5 mt-2">
           <div class="chip"><span class="chip-label">Output size</span><span class="chip-value">{{ panel.output_size_wh | join(' × ') if panel.output_size_wh else '—' }}</span></div>
           <div class="chip"><span class="chip-label">Mode</span><span class="chip-value">{{ (panel.mode or '—') | capitalize }} · {{ (panel.direction or '—') | capitalize }}</span></div>
+          <div class="chip"><span class="chip-label">Direction basis</span><span class="chip-value">{{ 'input layout (unverified)' if panel.direction_basis == 'inferred_from_input_layout' else (panel.direction_basis or '—') }}</span></div>
           <div class="chip"><span class="chip-label">Blend</span><span class="chip-value">{{ panel.blend or '—' }}</span></div>
           <div class="chip"><span class="chip-label">File size</span><span class="chip-value">{{ panel.file_size or '—' }}</span></div>
         </div>

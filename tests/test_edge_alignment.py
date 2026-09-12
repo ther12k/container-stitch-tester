@@ -196,11 +196,13 @@ class DirectionHintTests(unittest.TestCase):
         # vertical, the recipe says horizontal. Formerly a hard rejection.
         config, _, _, _, warnings = cs.load_job(self._config("stacked.json", stacked=True))
         self.assertEqual(config["direction"], "horizontal")
+        self.assertEqual(config["direction_basis"], "explicit_recipe")
         self.assertTrue(any("packaging" in w for w in warnings), warnings)
 
     def test_matching_packaging_stays_warning_free(self):
         config, _, _, _, warnings = cs.load_job(self._config("side.json", stacked=False))
         self.assertEqual(config["direction"], "horizontal")
+        self.assertEqual(config["direction_basis"], "explicit_recipe")
         self.assertFalse(any("packaging" in w for w in warnings), warnings)
 
     def test_auto_still_resolves_from_layout(self):
@@ -210,6 +212,9 @@ class DirectionHintTests(unittest.TestCase):
         cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
         config, _, _, _, warnings = cs.load_job(cfg_path)
         self.assertEqual(config["direction"], "vertical")
+        # Auto is a documented convenience: the report must say the basis is
+        # input layout, not an independently verified physical axis.
+        self.assertEqual(config["direction_basis"], "inferred_from_input_layout")
         self.assertTrue(any("auto-resolved" in w for w in warnings), warnings)
 
 

@@ -368,7 +368,7 @@ def load_job(config_path: Path, mode: str | None = None, input_path: Path | None
         config = legacy_to_job(config, str(input_path.resolve()))
         warnings.append("Legacy config adapted. Physical grouping comes from its manual selections, not detection.")
     object_keys(config, {"schema_version", "mode", "height", "gap_px", "sources", "containers", "notes",
-                         "direction", "layout", "cross_size_px", "edge_alignment"}, "job")
+                         "direction", "direction_basis", "layout", "cross_size_px", "edge_alignment"}, "job")
     version = integer(config.get("schema_version"), "schema_version", 1, 2)
     if version == 2 and "direction" not in config:
         raise ProcessingError("Schema 2 requires an explicit direction: horizontal, vertical, or auto.")
@@ -380,9 +380,12 @@ def load_job(config_path: Path, mode: str | None = None, input_path: Path | None
         if view_hint is None:
             raise ProcessingError("direction:auto is ambiguous for these regions. Set horizontal or vertical explicitly.")
         config["direction"] = view_hint
-        warnings.append(f"Direction auto-resolved to {view_hint} from obvious same-source view-box layout; pixel content was not inspected.")
+        config["direction_basis"] = "inferred_from_input_layout"
+        warnings.append(f"Direction auto-resolved to {view_hint} from obvious same-source view-box layout; pixel content was not inspected. "
+                        "The physical stitch axis is NOT independently verified.")
     else:
         config["direction"] = requested_direction
+        config["direction_basis"] = "explicit_recipe"
         if view_hint is not None and view_hint != requested_direction:
             # View-box arrangement describes how panels were packaged into the
             # uploaded image, not the physical stitch axis; an explicit
@@ -769,6 +772,9 @@ def measure_strip_alignment(a: np.ndarray, va: np.ndarray, b: np.ndarray, vb: np
     out["applied"] = True
     out["trim_px"] = trim
     out["shift_px"] = shift_applied
+    out["placement_note"] = ("Cross placement is quantized to whole pixels (worst-case 0.5 px along the "
+                             "shifted axis at the working resolution) to avoid additional resampling; "
+                             "suitability of that bound is a property of the downstream task, not of this fit.")
     out["warning"] = ("Correction is measured from pixels and re-scored under the exact "
                       "translation-only transform that was applied; repeated corrugations can "
                       "alias by one period. Visual review of the seam is still required.")
@@ -1781,6 +1787,7 @@ def run_job(config_path: Path | str, out: Path | str, *, mode: str | None = None
             "schema_version": 2, "program_version": VERSION, "status": "created_requires_review",
             "processing_state": "created", "quality_state": quality_state, "quality_label": quality_label,
             "mode": config["mode"], "direction": config["direction"], "layout": config["layout"],
+            "direction_basis": config.get("direction_basis", "explicit_recipe"),
             "cross_size_px": cross_size, "physical_container_count": len(groups),
             "mode_and_identity_source": "explicit configuration/operator input; not automatic detection or OCR",
             "source_records": source_records, "config_sha256": digest(config_path),
