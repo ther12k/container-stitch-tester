@@ -341,7 +341,8 @@
               <h3 class="font-bold text-sm leading-tight">Recent Jobs</h3>
               <button hx-get="/jobs" hx-target="#jobs" class="text-[10px] font-medium text-blue-600 hover:underline">View All</button>
             </div>
-            <div id="jobs" class="mt-2.5 space-y-1.5 max-h-52 overflow-y-auto pr-0.5" hx-get="/jobs" hx-trigger="refreshJobs from:body">
+            <div id="jobs" class="mt-2.5 space-y-1.5 max-h-52 overflow-y-auto pr-0.5" hx-get="/jobs" hx-trigger="refreshJobs from:body"
+                 hx-on::after-swap="maybeSelectFirstJob()">
               {% include '_jobs.html' %}
             </div>
           </section>
@@ -349,8 +350,8 @@
           <!-- Job Details -->
           <section class="card p-4">
             <h3 class="font-bold text-sm leading-tight">Job Details</h3>
-            <div id="job-details" class="mt-2.5 max-h-52 overflow-y-auto pr-0.5">
-              <p class="text-xs text-mute">Select a job to inspect its metadata.</p>
+            <div id="job-details" class="mt-2.5 max-h-96 overflow-y-auto pr-0.5">
+              <p class="text-xs text-mute">Select a job to see its stitched image and full details.</p>
             </div>
           </section>
 
@@ -725,6 +726,14 @@ function resetDefaultConfig() {
 /* ═══════════ Job selection: details + JSON tabs ═══════════ */
 const jsonState = { config: null, report: null, batch: null, active: 'config' };
 
+/* Auto-open the most recent job whenever the jobs list renders and nothing
+   is selected yet — the details panel shows image + details immediately. */
+function maybeSelectFirstJob() {
+  const first = document.querySelector('.job-row');
+  if (first && !document.querySelector('.job-row.job-on')) selectJob(first.dataset.jobId);
+}
+document.addEventListener('DOMContentLoaded', maybeSelectFirstJob);
+
 async function selectJob(jobId) {
   document.querySelectorAll('.job-row').forEach(r => r.classList.toggle('job-on', r.dataset.jobId === jobId));
   const details = document.getElementById('job-details');
@@ -745,19 +754,70 @@ async function selectJob(jobId) {
 
     const runtime = meta.runtime_ms ? `${(meta.runtime_ms / 1000).toFixed(1)} seconds` : '—';
     const bad = String(report.status).includes('reject');
+    const isBatch = Array.isArray(report.jobs);
+
+    /* Result image (single jobs): clickable to open full size. */
+    let imageHtml;
+    if (bad) {
+      imageHtml = `<div class="rounded-lg border border-red-100 bg-red-50 p-2 text-[10px] text-red-700">
+        This job was rejected by the engine — no composite was produced.${report.reason ? `<br>Reason: ${esc(report.reason)}` : ''}</div>`;
+    } else if (isBatch) {
+      imageHtml = `<div class="rounded-lg border border-line bg-soft p-2 text-[10px] text-mute">
+        Batch run (${report.jobs.length} jobs) — browse the JSON tab or the job folder for per-job outputs.</div>`;
+    } else {
+      imageHtml = `<a href="/jobs/${jobId}/result.png" target="_blank" rel="noopener" title="Open full size in a new tab"
+             class="block relative rounded-lg overflow-hidden border border-line bg-[repeating-conic-gradient(#f1f5f9_0%_25%,#ffffff_0%_50%)] bg-[length:16px_16px] group">
+          <img src="/jobs/${jobId}/result.png" alt="Stitched result of ${esc(meta.label || jobId)}" loading="lazy"
+               class="w-full max-h-44 object-contain bg-white cursor-zoom-in"
+               onerror="this.parentElement.replaceWith(Object.assign(document.createElement('div'),{className:'rounded-lg border border-line bg-soft p-2 text-[10px] text-mute',textContent:'Result image unavailable.'}))">
+          <span class="absolute bottom-1 right-1 text-[9px] font-medium text-white bg-black/55 rounded px-1.5 py-0.5 opacity-0 group-hover:opacity-100 transition-opacity">open full size ↗</span>
+        </a>`;
+    }
+
+    /* Compact seam + composition summary across containers. */
+    let seamBits = [];
+    let methods = [];
+    (report.containers || []).forEach(c => {
+      methods.push(c.method);
+      const sa = c.seam_alignment;
+      if (c.promoted_from_edge) seamBits.push('promoted to verified overlap');
+      else if (sa && sa.applied && sa.source === 'configured') seamBits.push(`calibrated offset ${sa.shift_px > 0 ? '+' : ''}${sa.shift_px} px`);
+      else if (sa && sa.applied) seamBits.push(`measured (trim ${sa.trim_px} px, shift ${sa.shift_px} px)`);
+      else if (sa && sa.reason) seamBits.push('seam measurement declined');
+    });
+    const seamSummary = seamBits.length ? seamBits.join(', ') : (isBatch ? '—' : (methods[0] === 'rectify' ? 'no seam (single view)' : 'butt join as declared'));
+    const warnCount = (report.warnings || []).length;
+
+    const rows = [
+      ['Status', `<span class="badge ${bad ? 'badge-err' : 'badge-ok'}">${esc(report.status)}</span>`],
+      ['Started', esc(meta.started_at || '—')],
+      ['Runtime', runtime],
+      ['Kind', esc(title(meta.kind) || (isBatch ? 'Batch' : 'Single') )],
+      ['Mode / Direction', `${esc(title(report.mode) || '—')} / ${esc(title(report.direction) || '—')}`],
+      ['Direction basis', report.direction_basis === 'inferred_from_input_layout' ? 'input layout (unverified)' : 'explicit recipe'],
+      ['Quality', esc(report.quality_label || '—')],
+      ['Containers', isBatch ? `${report.jobs.length} jobs` : `${(report.containers || []).length} (${methods.join(', ') || '—'})`],
+      ['Seam', esc(seamSummary)],
+      ['Output size', `${(report.output_size_wh || []).join(' × ') || '—'}`],
+      ['Warnings', isBatch ? '—' : `${warnCount} (see report JSON)`],
+    ];
+    const rowsHtml = rows.map(([k, v]) => `<div class="detail-row"><span>${k}</span><b>${v}</b></div>`).join('');
+
+    const actions = [];
+    if (!bad && !isBatch) {
+      actions.push(`<a href="/jobs/${jobId}/result.png" target="_blank" rel="noopener" class="text-[10px] font-medium text-blue-600 hover:underline">Open image ↗</a>`);
+      actions.push(`<a href="/jobs/${jobId}/result.png" download="${jobId}-result.png" class="text-[10px] font-medium text-blue-600 hover:underline">Download</a>`);
+    }
+    actions.push(`<a href="/api/jobs/${jobId}/report" target="_blank" rel="noopener" class="text-[10px] font-medium text-blue-600 hover:underline">report.json</a>`);
+    if (config) actions.push(`<a href="/api/jobs/${jobId}/config" target="_blank" rel="noopener" class="text-[10px] font-medium text-blue-600 hover:underline">config.json</a>`);
+
     details.innerHTML = `
-      <div class="space-y-1.5 text-[11px]">
-        <div class="flex items-center justify-between">
-          <span class="text-mute">Status</span>
-          <span class="badge ${bad ? 'badge-err' : 'badge-ok'}">${esc(report.status)}</span>
+      <div class="space-y-2">
+        ${imageHtml}
+        <div class="flex flex-wrap gap-x-3 gap-y-1">
+          ${actions.map(a => a).join('')}
         </div>
-        <div class="detail-row"><span>Started</span><b>${esc(meta.started_at || '—')}</b></div>
-        <div class="detail-row"><span>Runtime</span><b>${runtime}</b></div>
-        <div class="detail-row"><span>Example</span><b>${esc(meta.label || jobId)}</b></div>
-        <div class="detail-row"><span>Mode / Direction</span><b>${esc(title(report.mode) || '—')} / ${esc(title(report.direction) || '—')}</b></div>
-        <div class="detail-row"><span>Exposure</span><b>${meta.no_balance ? 'Disabled' : 'Per config'}</b></div>
-        <div class="detail-row"><span>Quality</span><b>${esc(report.quality_label || '—')}</b></div>
-        <div class="detail-row"><span>Output size</span><b>${(report.output_size_wh || []).join(' × ') || '—'}</b></div>
+        <div class="space-y-1 text-[11px]">${rowsHtml}</div>
       </div>`;
   } catch (err) {
     details.innerHTML = `<p class="text-xs text-mute">Could not load this job's details.</p>`;
