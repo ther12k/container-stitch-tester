@@ -195,5 +195,88 @@ class AiRunCoverageRetryTests(unittest.TestCase):
         self.assertIn("coverage mismatch", page)  # disclosed in the attempt log
 
 
+class AiUnverifiedSeamRetryTests(unittest.TestCase):
+    """An accepted butt join whose seam measurement declined is the planner
+    guessing the boundary (the wrong top-view composite report). The run must
+    re-plan once with overlap guidance instead of shipping the suspect join;
+    a second decline still ships, flagged."""
+
+    def _png(self, wide: int = 800, high: int = 800) -> bytes:
+        import cv2
+        import numpy as np
+        rng = np.random.default_rng(5)
+        img = cv2.GaussianBlur(rng.integers(40, 215, (high, wide, 3), dtype=np.uint8), (3, 3), .8)
+        ok, enc = cv2.imencode(".png", img)
+        assert ok
+        return enc.tobytes()
+
+    def _post(self, client, replies):
+        data = {"image": (io.BytesIO(self._png()), "input.png"),
+                "settings": json.dumps({
+                    "planner": {"base_url": "http://example.invalid/v1",
+                                "api_key": "k", "model": "mock"},
+                    "max_attempts": 2, "request_timeout": 15})}
+        with mock.patch.object(ai_planner, "chat_completion", side_effect=lambda *a, **k: next(replies)):
+            return client.post("/run-ai", data=data, content_type="multipart/form-data")
+
+    def test_suspect_seam_helper(self):
+        import app as webapp
+        self.assertTrue(webapp._suspect_seam(
+            {"containers": [{"method": "edge", "seam_alignment": {"applied": False}}]}))
+        self.assertFalse(webapp._suspect_seam(
+            {"containers": [{"method": "edge", "seam_alignment": {"applied": True}}]}))
+        self.assertFalse(webapp._suspect_seam(
+            {"containers": [{"method": "rectify"}]}))
+
+    def test_declined_seam_triggers_one_replan(self):
+        import re
+        import app as webapp
+        application = webapp.create_app()
+        application.config["TESTING"] = True
+        client = application.test_client()
+
+        # Attempt 1: exact 50/50 split — no shared coverage for the seam
+        # measurement, so the join ships unverified. Attempt 2 (after the
+        # automatic feedback): genuine overlap between the regions, which the
+        # engine measures, trims, and verifies.
+        butt_plan = json.dumps({
+            "scene": {"view_layout": "vertical_stack", "physical_containers": 1},
+            "target": {"container_index": 0, "surface": "roof"},
+            "suggested_processing": {"direction": "vertical"},
+            "containers": [group("container_1", "edge", [
+                region(0.1, 0.05, 0.9, 0.5),
+                region(0.1, 0.5, 0.9, 0.95),
+            ])],
+            "exclude": [], "reason": "two adjacent roof views",
+            "confidence": {"direction": 0.9, "container_grouping": 0.9, "same_surface": 0.9},
+        })
+        overlap_plan = json.dumps({
+            "scene": {"view_layout": "vertical_stack", "physical_containers": 1},
+            "target": {"container_index": 0, "surface": "roof"},
+            "suggested_processing": {"direction": "vertical"},
+            "containers": [group("container_1", "edge", [
+                region(0.1, 0.05, 0.9, 0.65),
+                region(0.1, 0.5, 0.9, 0.95),
+            ])],
+            "exclude": [], "reason": "two roof views with shared coverage",
+            "confidence": {"direction": 0.9, "container_grouping": 0.9, "same_surface": 0.95},
+        })
+        replies = iter([butt_plan, overlap_plan])
+        resp = self._post(client, replies)
+        page = resp.get_data(as_text=True)
+        # The final accepted job is the second attempt (its id carries -a2),
+        # and the attempt log records the unverified-seam feedback.
+        self.assertIn("-a2", page)
+        self.assertIn("seam measurement declined", page)
+        m = re.search(r'jobs/(ai-[a-z0-9-]+-a2)', page)
+        self.assertIsNotNone(m, "final attempt job id not found in result page")
+        report = json.loads(client.get(f"/api/jobs/{m.group(1)}/report").get_data(as_text=True))
+        c = report["containers"][0]
+        verified = (c.get("promoted_from_edge") is not None
+                    or (c.get("seam_alignment") or {}).get("applied") is True)
+        self.assertTrue(verified, f"attempt 2 was not seam-verified: {c.get('method')}, "
+                                  f"{c.get('seam_alignment')}")
+
+
 if __name__ == "__main__":
     unittest.main()

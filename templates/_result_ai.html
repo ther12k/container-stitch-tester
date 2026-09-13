@@ -15,6 +15,9 @@
   {% if conf %}
     <p class="text-[10px] text-mute -mt-1">Confidence values are what the planner asserted about its own proposal — the engine's validation is the verdict below, not these numbers.</p>
   {% endif %}
+  {% if ai_meta.flagged %}
+  <div class="banner-warn !py-1.5 !px-2 text-[10px] mt-1">⚠️ {{ ai_meta.flagged }}</div>
+  {% endif %}
   {% set scene = ai_meta.scene or {} %}
   {% set n_visible = scene.physical_containers %}
   {% if n_visible %}

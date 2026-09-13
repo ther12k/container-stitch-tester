@@ -54,6 +54,14 @@ Rules:
 - edge: two adjacent views of the same surface, adjacency known, overlap NOT verified.
 - overlap: the SAME surface genuinely appears in both views with real shared coverage.
   Choose overlap ONLY when confidence.same_surface >= 0.85.
+- VERIFIABLE BOUNDARIES: when two views meet at a boundary whose exact position in the photo
+  is unknown, do NOT split them at an exact side-by-side line (e.g. mid-height). Instead
+  propose a modest OVERLAP: extend the second region to include ~5-10% of the first view's
+  coverage. The engine measures and trims verified overlap; a perfect butt join cannot be
+  verified and ships as an unreviewed composite.
+- NO INVENTED GEOMETRY: fixed crane cameras are mounted square to the container. Quads must
+  be near-axis-aligned rectangles unless the tilt or perspective is plainly visible in the
+  photo. Corner estimates that contradict the visible edges produce a skewed composite.
 - One container group per physical container. Never group different containers together —
   adjacent regions of ONE group must belong to the SAME container's surface, never span
   two separate containers.

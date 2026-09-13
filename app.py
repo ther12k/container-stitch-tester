@@ -709,6 +709,39 @@ def create_app() -> Flask:
         last_plan = None
         dead_providers: set[str] = set()
         transient_failures: dict[str, int] = {}
+        declined_retried = False
+        fallback_render = None
+
+        def render_ai_result(job_name: str, prov_label: str, report_, rt_, plan_, attempt_,
+                             flagged: str | None = None):
+            return render_template(
+                "_result_ai.html",
+                ok=True,
+                job_id=job_name,
+                ai_meta={
+                    "planner": planner.get("model", ""),
+                    "reviewer": reviewer.get("model", "") if has_reviewer else "",
+                    "attempts": attempt_log,
+                    "attempt_count": attempt_,
+                    "max_attempts": max_attempts,
+                    "confidence": plan_.get("confidence", {}),
+                    "reason": plan_.get("reason", ""),
+                    "exclude": plan_.get("exclude", []),
+                    "scene": plan_.get("scene", {}),
+                    "plan": plan_,
+                    "no_balance": no_balance,
+                    "flagged": flagged,
+                },
+                picked_ctx={
+                    "job_id": job_name,
+                    "panel": panel_from_report(report_, job_name, JOBS_DIR / job_name, rt_,
+                                               f"AI plan ({prov_label})", "job"),
+                    "report": report_,
+                    "title": "AI-planned run",
+                    "message": "AI proposed the configuration; the deterministic engine validated and stitched it.",
+                },
+                created_at=now_str(),
+            )
         try:
             request_timeout = max(15, min(int(settings.get("request_timeout", 90)), 240))
         except (TypeError, ValueError):
@@ -809,33 +842,38 @@ def create_app() -> Flask:
             attempt_log.append({"attempt": attempt, "provider": prov_name, "stage": "engine",
                                 "ok": True, "detail": "accepted"})
             emit("ok", f"engine accepted attempt {attempt} — {report.get('quality_label', 'done')} ({rt / 1000:.1f}s total)")
-            return render_template(
-                "_result_ai.html",
-                ok=True,
-                job_id=attempt_dir.name,
-                ai_meta={
-                    "planner": planner.get("model", ""),
-                    "reviewer": reviewer.get("model", "") if has_reviewer else "",
-                    "attempts": attempt_log,
-                    "attempt_count": attempt,
-                    "max_attempts": max_attempts,
-                    "confidence": plan.get("confidence", {}),
-                    "reason": plan.get("reason", ""),
-                    "exclude": plan.get("exclude", []),
-                    "scene": plan.get("scene", {}),
-                    "plan": plan,
-                    "no_balance": no_balance,
-                },
-                picked_ctx={
-                    "job_id": attempt_dir.name,
-                    "panel": panel_from_report(report, attempt_dir.name, attempt_dir, rt,
-                                               f"AI plan ({prov_name})", "job"),
-                    "report": report,
-                    "title": "AI-planned run",
-                    "message": "AI proposed the configuration; the deterministic engine validated and stitched it.",
-                },
-                created_at=now_str(),
-            )
+
+            # An accepted butt join whose seam measurement declined is exactly
+            # the "planner guessed the boundary" case: one re-plan with overlap
+            # guidance usually finds a verifiable split. Bounded — a second
+            # decline (genuinely unmeasurable surface) ships as-is.
+            if _suspect_seam(report) and attempt < max_attempts and not declined_retried:
+                declined_retried = True
+                attempt_log.append({
+                    "attempt": attempt, "provider": prov_name, "stage": "engine",
+                    "ok": True, "accepted_with_unverified_seam": True,
+                    "detail": "accepted, but the seam measurement declined: the proposed region "
+                              "boundary could not be verified against the pixels (unverified edge "
+                              "composite). The butt join may duplicate or drop content at the seam.",
+                    "feedback": "Re-propose with a modest OVERLAP between the two regions — extend the "
+                                "second region to include ~5-10% of the first view's coverage instead "
+                                "of splitting at an exact line. Keep quads axis-aligned rectangles. "
+                                "The engine measures and trims verified overlap into a continuous seam.",
+                })
+                fallback_render = (attempt_dir.name, prov_name, report, rt, plan, attempt)
+                emit("warn", f"attempt {attempt}: stitched, but the seam could not be verified — "
+                             f"asking the {'reviewer' if has_reviewer else 'planner'} to re-plan with a verifiable overlap…")
+                continue
+
+            return render_ai_result(attempt_dir.name, prov_name, report, rt, plan, attempt)
+
+        if fallback_render is not None:
+            fb_job, fb_prov, fb_report, fb_rt, fb_plan, fb_attempt = fallback_render
+            emit("warn", "the re-plan did not verify a seam either — shipping the earlier "
+                         "flagged result; review the seam before relying on it")
+            return render_ai_result(fb_job, fb_prov, fb_report, fb_rt, fb_plan, fb_attempt,
+                                    flagged="Seam could not be verified against the pixels — "
+                                            "review the seam before relying on this output.")
 
         emit("error", "all attempts rejected — no composite was produced")
         # Keep the full raw provider responses (including unsanitized bodies)
@@ -1245,6 +1283,19 @@ def run_auto_custom(config_path: Path, out_dir: Path, work_dir: Path, job_id: st
 
 
 # ------------------------------------------------------------------ helpers
+
+def _suspect_seam(report: dict) -> bool:
+    """True when an accepted edge run carries a seam that pixel measurement
+    declined — the join geometry then rests entirely on the plan's corner
+    estimates, which is exactly the case worth one re-planning attempt."""
+    for c in report.get("containers", []):
+        if c.get("method") != "edge":
+            continue
+        sa = c.get("seam_alignment") or {}
+        if not sa.get("applied"):
+            return True
+    return False
+
 
 def panel_from_report(report: dict, job_id: str, out_dir: Path, runtime_ms: int,
                       label: str, kind: str) -> dict:
