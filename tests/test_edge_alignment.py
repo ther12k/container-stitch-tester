@@ -160,6 +160,88 @@ class MeasureStripAlignmentTests(unittest.TestCase):
         self.assertIn("reason", m)
 
 
+class CrossOffsetCalibrationTests(unittest.TestCase):
+    """Operator-calibrated cross-axis seam offset (fixed camera pairs): applied
+    only when the pixel measurement cannot measure the seam, always disclosed
+    as configured rather than measured, and bounded by the same clamp fraction
+    as measured corrections."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.base = Path(self.tmp.name)
+        cs.save_image(self.base / "input.png", textured_plane(17))
+        self.base_cfg = {
+            "schema_version": 2, "mode": "single", "direction": "horizontal",
+            "cross_size_px": 200, "gap_px": 8,
+            "sources": {"main": {"path": "input.png", "expected_size_wh": [1600, 400]}},
+            "containers": [{
+                "key": "container_1", "method": "edge", "same_surface_confirmed": True,
+                "regions": [
+                    {"source": "main", "view_box": [0, 0, 800, 400],
+                     "quad": [[100, 50], [700, 50], [700, 350], [100, 350]]},
+                    {"source": "main", "view_box": [800, 0, 1600, 400],
+                     "quad": [[100, 50], [700, 50], [700, 350], [100, 350]]},
+                ],
+            }],
+        }
+
+    def _run(self, **container_extra):
+        cfg = json.loads(json.dumps(self.base_cfg))
+        cfg["containers"][0].update(container_extra)
+        path = self.base / f"cfg_{abs(hash(json.dumps(container_extra, sort_keys=True)))}.json"
+        path.write_text(json.dumps(cfg), encoding="utf-8")
+        return cs.run_job(path, self.base / f"out_{path.stem}")
+
+    def test_out_of_range_offset_rejected(self):
+        with self.assertRaises(cs.ProcessingError) as ctx:
+            self._run(cross_offset_px=999)
+        self.assertIn("cross_offset_px", str(ctx.exception))
+
+    def test_non_numeric_offset_rejected(self):
+        with self.assertRaises(cs.ProcessingError):
+            self._run(cross_offset_px="up a bit")
+
+    def test_configured_offset_applied_and_disclosed(self):
+        cfg = json.loads(json.dumps(self.base_cfg))
+        cfg["edge_alignment"] = "butt"
+        cfg["containers"][0]["cross_offset_px"] = -8
+        path = self.base / "cfg_butt.json"
+        path.write_text(json.dumps(cfg), encoding="utf-8")
+        report = cs.run_job(path, self.base / "out_butt_offset")
+        c = report["containers"][0]
+        sa = c["seam_alignment"]
+        self.assertTrue(sa["applied"])
+        self.assertEqual(sa["source"], "configured")
+        self.assertEqual(sa["shift_px"], -8)
+        self.assertEqual(sa["trim_px"], 0)
+        self.assertNotIn("strong", sa)  # never the strong tier
+        self.assertEqual(c["status"], "manual_edge_join_unverified")
+        self.assertEqual(report["quality_state"], "unverified_edge_composite")
+        self.assertTrue(any("calibrated camera profile" in w for w in c["warnings"]),
+                        c["warnings"])
+        # canvas grew on both sides of the join, nothing cropped
+        self.assertEqual(report["output_size_wh"][1], 200 + 8)
+
+    def test_measured_correction_supersedes_configured(self):
+        # Rich texture: the measured path applies its own correction; the
+        # configured constant must not be added on top of it.
+        cfg = json.loads(json.dumps(self.base_cfg))
+        cfg["edge_alignment"] = "measure"
+        cfg["containers"][0]["cross_offset_px"] = -8
+        path = self.base / "cfg_measure.json"
+        path.write_text(json.dumps(cfg), encoding="utf-8")
+        report = cs.run_job(path, self.base / "out_measure_offset")
+        c = report["containers"][0]
+        if "promoted_from_edge" in c:
+            self.skipTest("fixture promoted to overlap; supersession not exercised")
+        sa = c["seam_alignment"]
+        if sa.get("applied") and sa.get("source") != "configured":
+            self.assertEqual(sa["configured_offset_px"], -8)
+            self.assertIn("superseded", sa["configured_offset_superseded"])
+        else:
+            self.assertEqual(sa.get("source"), "configured")
+
+
 class DirectionHintTests(unittest.TestCase):
     """Repacking identical views into a different collage layout must not
     change their physical stitching interpretation: an explicit direction is

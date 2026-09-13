@@ -148,6 +148,13 @@
             with the overlap method ({{ panel.seam_alignment.inliers }} strip inliers, scale
             {{ panel.seam_alignment.scale_measured }}).
           </p>
+          {% elif panel.seam_alignment.source == 'configured' %}
+          <p class="text-[10px] text-mute mt-1.5">
+            📐 <b class="text-ink">Seam offset from calibrated camera profile:</b>
+            cross-axis shift {{ panel.seam_alignment.shift_px }} px applied from the operator's
+            calibration — not measured from this photo's pixels.
+            {% if panel.seam_alignment.configured_offset_superseded %}(superseded by a measured correction){% endif %}
+          </p>
           {% elif panel.seam_alignment.applied %}
           <p class="text-[10px] text-mute mt-1.5">
             📐 <b class="text-ink">Seam realigned from pixels:</b>

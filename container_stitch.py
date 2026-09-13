@@ -424,6 +424,25 @@ def load_job(config_path: Path, mode: str | None = None, input_path: Path | None
                                   'or "measure" (feature-measured seam refinement).')
     else:
         config["edge_alignment"] = "butt"
+    # Operator-calibrated cross-axis seam offset (per fixed camera pair), in
+    # working cross-size pixels: positive moves the second strip down,
+    # negative up — same convention as the measured shift_px. Applied only
+    # when the pixel measurement cannot measure this seam, and disclosed as
+    # configured rather than measured.
+    offset_limit = SEAM_ALIGN_CLAMP["max_cross_offset_fraction"] * config["cross_size_px"]
+    for c in config.get("containers", []):
+        raw = c.get("cross_offset_px")
+        if raw is None:
+            continue
+        try:
+            offset = float(raw)
+        except (TypeError, ValueError):
+            raise ProcessingError(f"Container {c.get('key')}: cross_offset_px must be a number.")
+        if not np.isfinite(offset) or abs(offset) > offset_limit:
+            raise ProcessingError(
+                f"Container {c.get('key')}: cross_offset_px must be within ±{offset_limit:.0f} "
+                f"(0.14 × cross_size_px {config['cross_size_px']}).")
+        c["cross_offset_px"] = offset
     containers = config.get("containers")
     if not isinstance(containers, list) or not 1 <= len(containers) <= 8:
         raise ProcessingError("containers must contain 1..8 physical-container groups.")
@@ -482,7 +501,7 @@ def load_job(config_path: Path, mode: str | None = None, input_path: Path | None
     next_bit = 0
     for c in containers:
         object_keys(c, {"key", "container_id", "label", "method", "regions", "same_surface_confirmed",
-                        "exposure", "matching", "notes", "seam", "coverage"}, "container")
+                        "exposure", "matching", "notes", "seam", "coverage", "cross_offset_px"}, "container")
         key = safe_key(c.get("key"), "container key")
         if key in keys:
             raise ProcessingError("Container keys must be unique.")
@@ -1502,6 +1521,31 @@ def process_group(group: Group, cross_size: int, out: Path, no_balance: bool,
             except ProcessingError as exc:
                 alignment["promotion_attempted"] = True
                 alignment["promotion_rejected"] = str(exc)[:200]
+    # Operator-calibrated cross offset (fixed camera pair): applied only when
+    # the pixel measurement did not apply a correction. Measured evidence
+    # always outranks the configured constant; when both exist the report
+    # records that the configured value was superseded.
+    configured_offset = group.config.get("cross_offset_px")
+    if len(warped) == 2 and configured_offset is not None:
+        if alignment.get("applied"):
+            alignment["configured_offset_px"] = round(float(configured_offset), 2)
+            alignment["configured_offset_superseded"] = (
+                "a pixel-measured correction was applied; the configured cross offset was "
+                "NOT added to it")
+        else:
+            shift = int(round(float(configured_offset)))
+            alignment = {
+                "enabled": True, "applied": True, "source": "configured",
+                "direction": direction,
+                "note": "Cross-axis offset applied from the operator-calibrated camera profile "
+                        "(fixed mounting offset), NOT measured from this photo's pixels.",
+                "trim_px": 0, "shift_px": shift,
+                "warning": ("Configured seam offset — no per-photo pixel evidence. Review the seam "
+                            "visually and recalibrate if the camera mount changes."),
+            }
+            if abs(float(configured_offset) - shift) >= 0.5:
+                alignment["note"] += (f" Requested {configured_offset:.1f} px was quantized to "
+                                      f"{shift} px (whole-pixel placement).")
         if alignment.get("applied"):
             warped[1], valids[1] = _realigned_strip(warped[1], valids[1], alignment, direction)
             # The shifted strip grew by |shift| along the cross axis; pad the
@@ -1605,6 +1649,11 @@ def process_group(group: Group, cross_size: int, out: Path, no_balance: bool,
                         "re-scored under the exact translation-only correction that was applied, and stayed "
                         "within tight clamps; declared corners were refined, not replaced.",
                         "Repeated corrugations can alias the measurement by one period; review the seam visually."]
+        elif alignment.get("applied") and alignment.get("source") == "configured":
+            warnings = ["The cross-axis seam offset came from the operator-calibrated camera profile, "
+                        "not from this photo's pixels; the seam position along the strip is still the "
+                        "declared butt join.",
+                        "Recalibrate if the camera mount changes; review the seam visually."]
         elif alignment.get("applied"):
             warnings = ["The seam was refined by a translation measured from pixels with limited feature "
                         "support; no overlap verification passed, so treat the output as unreviewed.",

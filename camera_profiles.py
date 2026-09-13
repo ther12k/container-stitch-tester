@@ -22,7 +22,7 @@ import numpy as np
 from container_stitch import ProcessingError, check_quad
 
 PROFILE_KEYS = {"schema_version", "profile_key", "camera", "pin", "job_defaults", "containers", "notes"}
-CONTAINER_KEYS = {"key", "container_id", "label", "method", "regions", "exposure", "matching", "seam", "coverage", "notes"}
+CONTAINER_KEYS = {"key", "container_id", "label", "method", "regions", "exposure", "matching", "seam", "coverage", "notes", "cross_offset_px"}
 REGION_KEYS = {"source", "view_box", "quad", "feature_quad", "notes"}
 
 
@@ -144,7 +144,8 @@ def profile_to_config(profile: dict[str, Any], image_path: Path | str,
                                  "regions": [absolute_region(r) for r in c["regions"]]}
         if c["method"] != "rectify":
             entry["same_surface_confirmed"] = True  # operator confirmed at calibration time
-        for optional in ("container_id", "label", "exposure", "matching", "seam", "coverage", "notes"):
+        for optional in ("container_id", "label", "exposure", "matching", "seam", "coverage", "notes",
+                         "cross_offset_px"):
             if optional in c:
                 entry[optional] = c[optional]
         containers_out.append(entry)
