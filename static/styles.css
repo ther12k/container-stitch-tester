@@ -276,7 +276,8 @@ html.theme-dark .badge-violet { background: #2e1065; color: #c4b5fd; border-colo
   font-size: 0.78rem;
 }
 .detail-row span { color: var(--mute); flex-shrink: 0; }
-.detail-row b { font-weight: 600; text-align: right; }
+.detail-row b { font-weight: 600; text-align: right; overflow-wrap: anywhere; min-width: 0; }
+.detail-row b .badge { display: inline-block; }
 
 /* Code blocks / JSON viewer */
 .codeblock {

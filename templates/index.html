@@ -314,12 +314,12 @@
                 <button class="seg-btn seg-on" data-v="horizontal" onclick="segPick(this)">Horizontal</button>
                 <button class="seg-btn" data-v="vertical" onclick="segPick(this)">Vertical</button>
               </div>
-              <div id="spinner" class="htmx-indicator items-center gap-1.5 text-blue-600 text-xs font-medium">
-                <svg class="animate-spin w-3.5 h-3.5" viewBox="0 0 24 24" fill="none">
+              <div id="spinner" class="hidden items-center gap-1.5 text-blue-600 text-xs font-medium" role="status" aria-live="polite">
+                <svg id="run-status-spin" class="animate-spin w-3.5 h-3.5" viewBox="0 0 24 24" fill="none">
                   <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
                   <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
                 </svg>
-                Processing…
+                <span id="run-status-text">Processing…</span>
               </div>
             </div>
           </div>
@@ -333,22 +333,23 @@
         </section>
 
         <!-- Bottom row: jobs / details / json / console -->
-        <div class="grid md:grid-cols-2 xl:grid-cols-4 gap-4 items-start">
+        <div class="grid md:grid-cols-2 xl:grid-cols-12 gap-4 items-start">
 
           <!-- Recent Jobs -->
-          <section class="card p-4">
+          <section class="card p-4 xl:col-span-3">
             <div class="flex items-center justify-between">
               <h3 class="font-bold text-sm leading-tight">Recent Jobs</h3>
-              <button hx-get="/jobs" hx-target="#jobs" class="text-[10px] font-medium text-blue-600 hover:underline">View All</button>
+              <button hx-get="/jobs" hx-target="#jobs" aria-label="Refresh jobs list"
+                      class="text-[10px] font-medium text-blue-600 hover:underline">Refresh</button>
             </div>
-            <div id="jobs" class="mt-2.5 space-y-1.5 max-h-52 overflow-y-auto pr-0.5" hx-get="/jobs" hx-trigger="refreshJobs from:body"
+            <div id="jobs" class="mt-2.5 space-y-1.5 max-h-80 overflow-y-auto pr-0.5" hx-get="/jobs" hx-trigger="refreshJobs from:body"
                  hx-on::after-swap="maybeSelectFirstJob()">
               {% include '_jobs.html' %}
             </div>
           </section>
 
           <!-- Job Details -->
-          <section class="card p-4">
+          <section class="card p-4 md:col-span-2 xl:col-span-5">
             <h3 class="font-bold text-sm leading-tight">Job Details</h3>
             <div id="job-details" class="mt-2.5 max-h-96 overflow-y-auto pr-0.5">
               <p class="text-xs text-mute">Select a job to see its stitched image and full details.</p>
@@ -356,7 +357,7 @@
           </section>
 
           <!-- JSON Output -->
-          <section class="card p-4">
+          <section class="card p-4 md:col-span-2 xl:col-span-4">
             <div class="flex items-center justify-between">
               <h3 class="font-bold text-sm leading-tight">JSON Output</h3>
               <button onclick="copyJson()" class="text-[10px] font-medium text-blue-600 hover:underline">Copy</button>
@@ -366,17 +367,17 @@
               <button class="tab-btn pb-1.5" id="jtab-report" onclick="switchJsonTab('report')">Metadata</button>
               <button class="tab-btn pb-1.5" id="jtab-batch" onclick="switchJsonTab('batch')">Batch</button>
             </div>
-            <div id="json-view" class="codeblock font-mono text-[10px] leading-relaxed overflow-auto max-h-44 mt-2 select-text">Select a job to view its JSON.</div>
+            <div id="json-view" class="codeblock font-mono text-[10px] leading-relaxed overflow-auto max-h-80 mt-2 select-text">Select a job to view its JSON.</div>
           </section>
 
           <!-- Console -->
-          <section class="card p-4">
+          <section class="card p-4 md:col-span-2 xl:col-span-12">
             <div class="flex items-center justify-between">
               <h3 class="font-bold text-sm leading-tight">Console</h3>
               <button onclick="clearConsole()" class="text-[10px] font-medium text-blue-600 hover:underline">Clear</button>
             </div>
             <div id="console"
-                 class="mt-2.5 max-h-52 overflow-y-auto font-mono text-[9.5px] leading-relaxed space-y-0.5 pr-0.5"
+                 class="mt-2.5 max-h-40 overflow-y-auto font-mono text-[9.5px] leading-relaxed space-y-0.5 pr-0.5"
                  data-clean="0">
               <p class="text-mute">System events appear here while jobs run — staging, AI calls, engine verdicts, retries.</p>
             </div>
@@ -768,7 +769,7 @@ async function selectJob(jobId) {
       imageHtml = `<a href="/jobs/${jobId}/result.png" target="_blank" rel="noopener" title="Open full size in a new tab"
              class="block relative rounded-lg overflow-hidden border border-line bg-[repeating-conic-gradient(#f1f5f9_0%_25%,#ffffff_0%_50%)] bg-[length:16px_16px] group">
           <img src="/jobs/${jobId}/result.png" alt="Stitched result of ${esc(meta.label || jobId)}" loading="lazy"
-               class="w-full max-h-44 object-contain bg-white cursor-zoom-in"
+               class="w-full max-h-56 object-contain bg-white cursor-zoom-in"
                onerror="this.parentElement.replaceWith(Object.assign(document.createElement('div'),{className:'rounded-lg border border-line bg-soft p-2 text-[10px] text-mute',textContent:'Result image unavailable.'}))">
           <span class="absolute bottom-1 right-1 text-[9px] font-medium text-white bg-black/55 rounded px-1.5 py-0.5 opacity-0 group-hover:opacity-100 transition-opacity">open full size ↗</span>
         </a>`;
@@ -789,7 +790,7 @@ async function selectJob(jobId) {
     const warnCount = (report.warnings || []).length;
 
     const rows = [
-      ['Status', `<span class="badge ${bad ? 'badge-err' : 'badge-ok'}">${esc(report.status)}</span>`],
+      ['Status', `<span class="badge ${bad ? 'badge-err' : 'badge-ok'}" title="${esc(report.status)}">${esc((report.status || '').replace('created_requires_review', 'needs review'))}</span>`],
       ['Started', esc(meta.started_at || '—')],
       ['Runtime', runtime],
       ['Kind', esc(title(meta.kind) || (isBatch ? 'Batch' : 'Single') )],
@@ -1067,7 +1068,20 @@ function clearConsole() {
 async function streamRun(kind, fd) {
   fd.append('kind', kind);
   const spinner = document.getElementById('spinner');
-  spinner.classList.add('htmx-request');
+  const statusText = document.getElementById('run-status-text');
+  const spinSvg = document.getElementById('run-status-spin');
+  const t0 = Date.now();
+  const setStatus = (text, tone) => {
+    if (!statusText) return;
+    statusText.textContent = text;
+    spinner.classList.remove('text-blue-600', 'text-green-600', 'text-red-600');
+    spinner.classList.add(tone === 'ok' ? 'text-green-600' : tone === 'err' ? 'text-red-600' : 'text-blue-600');
+    if (tone) spinSvg.style.display = 'none';          // final state: text only
+    else spinSvg.style.display = '';                    // running: spinner on
+  };
+  spinner.classList.remove('hidden');
+  spinner.classList.add('flex');
+  setStatus(`${kind} run started`);
   logLine('start', 'start', `${kind} run started`);
   try {
     const res = await fetch('/runs/stream', { method: 'POST', body: fd });
@@ -1098,16 +1112,18 @@ async function streamRun(kind, fd) {
             sc.textContent = old.textContent;
             old.replaceWith(sc);
           });
+          target.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         } else {
           const e = JSON.parse(data);
           logLine(e.stage, e.level, e.message);
+          setStatus(e.message.length > 72 ? e.message.slice(0, 72) + '…' : e.message);
         }
       }
     }
+    setStatus(`done in ${((Date.now() - t0) / 1000).toFixed(1)}s`, 'ok');
   } catch (err) {
     logLine('error', 'error', `stream failed: ${err.message}`);
-  } finally {
-    spinner.classList.remove('htmx-request');
+    setStatus(`failed — ${err.message}`.slice(0, 80), 'err');
   }
 }
 

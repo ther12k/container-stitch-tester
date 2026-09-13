@@ -1356,10 +1356,18 @@ def time_ago(mtime: float) -> str:
     if delta < 60:
         return "just now"
     if delta < 3600:
-        return f"{delta // 60} minute{'s' if delta // 60 != 1 else ''} ago"
+        return f"{delta // 60}m ago"
     if delta < 86400:
-        return f"{delta // 3600} hour{'s' if delta // 3600 != 1 else ''} ago"
-    return f"{delta // 86400} day{'s' if delta // 86400 != 1 else ''} ago"
+        return f"{delta // 3600}h ago"
+    return f"{delta // 86400}d ago"
+
+
+STATUS_SHORT = {
+    "created_requires_review": "needs review",
+    "created": "created",
+    "rejected": "rejected",
+    "unknown": "unknown",
+}
 
 
 def render_result_error(message: str, job_id: str | None = None) -> str:
@@ -1476,6 +1484,7 @@ def list_recent_jobs() -> list[dict[str, str]]:
                 "direction": direction,
                 "updated": datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
                 "ago": time_ago(path.stat().st_mtime),
+                "status_short": STATUS_SHORT.get(status, status),
                 "runtime_ms": meta.get("runtime_ms"),
                 "thumb_url": result_rel,
                 "result_url": result_rel,
