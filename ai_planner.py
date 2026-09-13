@@ -283,6 +283,12 @@ def plan_to_config(plan: dict[str, Any], width: int, height: int) -> dict[str, A
             # The plan asserts the two regions show the same physical surface;
             # the engine still verifies geometry on its own terms.
             container["same_surface_confirmed"] = True
+            # Adjacent views of one surface are routinely captured at different
+            # exposures; run the engine's clamped median-gain balancer instead
+            # of shipping a visible brightness step at the seam. The balancer
+            # is deterministic and fully disclosed in the report (gains, fade,
+            # assumption warning).
+            container["exposure"] = {"enabled": True}
         containers_out.append(container)
 
     direction = (plan.get("suggested_processing") or {}).get("direction")

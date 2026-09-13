@@ -74,6 +74,20 @@ class CoverageConsistencyTests(unittest.TestCase):
                             group("c2", "rectify", [region(0.6, 0.1, 0.9, 0.9)])]}, 1920, 2160)
         self.assertEqual(cfg["mode"], "combo")
 
+    def test_plan_to_config_enables_exposure_for_edge_joins(self):
+        """Real crane side strips arrive with per-camera exposure steps; the
+        AI path must run the engine's clamped balancer instead of shipping
+        the brightness step at the seam. Rectify has no seam to balance."""
+        cfg = ai_planner.plan_to_config(
+            {"containers": [group("c1", "edge", [region(0.02, 0.1, 0.49, 0.9),
+                                                  region(0.51, 0.1, 0.98, 0.9)]),
+                            group("c2", "rectify", [region(0.1, 0.1, 0.9, 0.9)])]},
+            2744, 696)
+        edge = next(c for c in cfg["containers"] if c["method"] == "edge")
+        rect = next(c for c in cfg["containers"] if c["method"] == "rectify")
+        self.assertTrue(edge["exposure"]["enabled"])
+        self.assertNotIn("exposure", rect)
+
 
 class SeparationWarningTests(unittest.TestCase):
     def test_far_apart_quads_get_disclosed_warning(self):
