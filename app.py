@@ -1512,6 +1512,7 @@ def list_recent_jobs() -> list[dict[str, str]]:
         mode = ""
         direction = ""
         quality_state = ""
+        size_str = ""
         result_rel = None
         if summary_path:
             try:
@@ -1520,6 +1521,9 @@ def list_recent_jobs() -> list[dict[str, str]]:
                 mode = data.get("mode", "batch" if summary_path.name == "batch_report.json" else "")
                 direction = data.get("direction", "")
                 quality_state = data.get("quality_state", "")
+                size_wh = data.get("output_size_wh") or []
+                if size_wh:
+                    size_str = " × ".join(str(v) for v in size_wh)
                 if (path / "result.png").exists():
                     result_rel = url_for("job_file", job_id=path.name, filename="result.png")
             except Exception:
@@ -1536,6 +1540,7 @@ def list_recent_jobs() -> list[dict[str, str]]:
                 "updated": datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
                 "ago": time_ago(path.stat().st_mtime),
                 "status_short": STATUS_SHORT.get(status, status),
+                "size_str": size_str,
                 "runtime_ms": meta.get("runtime_ms"),
                 "thumb_url": result_rel,
                 "result_url": result_rel,

@@ -4,6 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Container Stitch Tester</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <script>
@@ -106,10 +109,9 @@
         </button>
         {% if auth_enabled %}
         <form method="post" action="/logout" class="contents">
-          <button type="submit" title="Sign out"
-                  class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 text-xs font-medium transition-colors">
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
-            Sign out
+          <button type="submit" title="Sign out" aria-label="Sign out"
+                  class="w-9 h-9 rounded-full bg-white/10 border border-white/20 text-white text-[11px] font-bold flex items-center justify-center hover:bg-white/20 transition-colors shrink-0">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
           </button>
         </form>
         {% endif %}
@@ -118,12 +120,12 @@
   </div><!-- /dark shell -->
 
   <!-- ════════════════ LIGHT CONTENT ════════════════ -->
-  <main class="flex-1 w-full max-w-screen-2xl mx-auto px-5 py-3 space-y-4 flex flex-col">
+  <main class="flex-1 w-full max-w-screen-2xl mx-auto px-4 py-3 flex flex-col min-h-0">
 
-    <div class="grid xl:grid-cols-[340px_1fr] gap-4 items-stretch flex-1 min-h-0">
+    <div class="grid xl:grid-cols-[320px_1fr_300px] gap-3 flex-1 min-h-0 items-start">
 
       <!-- ─── Left: Test Configuration ─── -->
-      <section class="card p-4 h-full flex flex-col" id="config-card">
+      <section class="card p-4 flex flex-col xl:sticky xl:top-3" id="config-card">
         <div class="flex items-center gap-2">
           <div class="icon-tile icon-tile-sm bg-blue-50 text-blue-600 shrink-0">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
@@ -290,11 +292,11 @@
         </div><!-- /panel-json -->
       </section>
 
-      <!-- ─── Right column: results + bottom cards ─── -->
-      <div class="space-y-4 min-w-0 flex flex-col">
+      <!-- ─── Center column ─── -->
+      <div class="min-w-0 flex flex-col gap-3">
 
         <!-- Results & Comparison -->
-        <section class="card p-4 flex-1 flex flex-col min-h-0">
+        <section class="card p-4 flex flex-col">
           <div class="flex flex-wrap items-center justify-between gap-3">
             <div class="flex items-center gap-2">
               <div class="icon-tile icon-tile-sm bg-blue-50 text-blue-600 shrink-0">
@@ -302,7 +304,7 @@
               </div>
               <div>
                 <h3 class="font-bold text-sm leading-tight">Results &amp; Comparison</h3>
-                <p class="text-[10px] text-mute">Inputs vs stitched result.</p>
+                <p class="text-[10px] text-mute">Compare source images with the stitched result.</p>
               </div>
             </div>
             <div class="flex items-center gap-2 flex-wrap">
@@ -332,32 +334,11 @@
           </div>
         </section>
 
-        <!-- Bottom row: jobs / details / json / console -->
-        <div class="grid md:grid-cols-2 xl:grid-cols-12 gap-4 items-start">
-
-          <!-- Recent Jobs -->
-          <section class="card p-4 xl:col-span-3">
-            <div class="flex items-center justify-between">
-              <h3 class="font-bold text-sm leading-tight">Recent Jobs</h3>
-              <button hx-get="/jobs" hx-target="#jobs" aria-label="Refresh jobs list"
-                      class="text-[10px] font-medium text-blue-600 hover:underline">Refresh</button>
-            </div>
-            <div id="jobs" class="mt-2.5 space-y-1.5 max-h-80 overflow-y-auto pr-0.5" hx-get="/jobs" hx-trigger="refreshJobs from:body"
-                 hx-on::after-swap="maybeSelectFirstJob()">
-              {% include '_jobs.html' %}
-            </div>
-          </section>
-
-          <!-- Job Details -->
-          <section class="card p-4 md:col-span-2 xl:col-span-5">
-            <h3 class="font-bold text-sm leading-tight">Job Details</h3>
-            <div id="job-details" class="mt-2.5 max-h-96 overflow-y-auto pr-0.5">
-              <p class="text-xs text-mute">Select a job to see its stitched image and full details.</p>
-            </div>
-          </section>
+        <!-- JSON Output + Console: side-by-side bottom row -->
+        <div class="grid grid-cols-2 gap-3">
 
           <!-- JSON Output -->
-          <section class="card p-4 md:col-span-2 xl:col-span-4">
+          <section class="card p-4">
             <div class="flex items-center justify-between">
               <h3 class="font-bold text-sm leading-tight">JSON Output</h3>
               <button onclick="copyJson()" class="text-[10px] font-medium text-blue-600 hover:underline">Copy</button>
@@ -371,7 +352,7 @@
           </section>
 
           <!-- Console -->
-          <section class="card p-4 md:col-span-2 xl:col-span-12">
+          <section class="card p-4">
             <div class="flex items-center justify-between">
               <h3 class="font-bold text-sm leading-tight">Console</h3>
               <button onclick="clearConsole()" class="text-[10px] font-medium text-blue-600 hover:underline">Clear</button>
@@ -382,7 +363,42 @@
               <p class="text-mute">System events appear here while jobs run — staging, AI calls, engine verdicts, retries.</p>
             </div>
           </section>
-        </div>
+        </div><!-- /bottom row grid -->
+      </div><!-- /center column -->
+
+      <!-- ─── Right column: Recent Jobs + Job Details ─── -->
+      <div class="flex flex-col gap-3 xl:sticky xl:top-3 self-start">
+
+        <!-- Recent Jobs -->
+        <section class="card p-4">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <svg class="w-3.5 h-3.5 text-blue-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+              <h3 class="font-bold text-sm leading-tight">Recent Jobs</h3>
+            </div>
+            <button hx-get="/jobs" hx-target="#jobs" aria-label="Refresh jobs list"
+                    class="text-[10px] font-medium text-blue-600 hover:underline">View all →</button>
+          </div>
+          <div id="jobs" class="mt-2.5 space-y-2 max-h-72 overflow-y-auto pr-0.5" hx-get="/jobs" hx-trigger="refreshJobs from:body"
+               hx-on::after-swap="maybeSelectFirstJob()">
+            {% include '_jobs.html' %}
+          </div>
+        </section>
+
+        <!-- Job Details -->
+        <section class="card p-4">
+          <div class="flex items-center justify-between mb-2.5">
+            <div class="flex items-center gap-2">
+              <svg class="w-3.5 h-3.5 text-blue-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+              <h3 class="font-bold text-sm leading-tight">Job Details</h3>
+            </div>
+            <span id="job-details-status" class="hidden badge badge-ok text-[9px]">Completed</span>
+          </div>
+          <div id="job-details" class="max-h-96 overflow-y-auto pr-0.5">
+            <p class="text-xs text-mute">Select a job above to see its details.</p>
+          </div>
+        </section>
+
       </div><!-- /right column -->
     </div>
   </main>
@@ -735,9 +751,174 @@ function maybeSelectFirstJob() {
 }
 document.addEventListener('DOMContentLoaded', maybeSelectFirstJob);
 
+/* ═══════════ Comparison viewer (center panel) ═══════════ */
+const cmpState = { sources: [], idx: 0, zoom: 1, navBound: false };
+
+function cmpNav(dir) {
+  if (cmpState.sources.length < 2) return;
+  cmpState.idx = (cmpState.idx + dir + cmpState.sources.length) % cmpState.sources.length;
+  cmpRenderSource();
+}
+function cmpRenderSource() {
+  const s = cmpState.sources[cmpState.idx];
+  const img = document.getElementById('cmp-source-img');
+  if (!img || !s) return;
+  img.src = s.url;
+  img.alt = s.name;
+  const name = document.getElementById('cmp-source-name');
+  const counter = document.getElementById('cmp-source-counter');
+  if (name) name.textContent = s.name;
+  if (counter) counter.textContent = `${cmpState.idx + 1} / ${cmpState.sources.length}`;
+}
+function cmpZoom(delta) {
+  cmpState.zoom = Math.min(4, Math.max(0.5, Math.round((cmpState.zoom + delta) * 10) / 10));
+  const img = document.getElementById('cmp-result-img');
+  if (img) img.style.transform = `scale(${cmpState.zoom})`;
+  const label = document.getElementById('cmp-zoom-label');
+  if (label) label.textContent = `${Math.round(cmpState.zoom * 100)}%`;
+}
+function cmpZoomReset() {
+  cmpState.zoom = 1;
+  const img = document.getElementById('cmp-result-img');
+  if (img) img.style.transform = '';
+  const label = document.getElementById('cmp-zoom-label');
+  if (label) label.textContent = '100%';
+}
+
+/* Thumbnail picker rendered by the _result.html partial (fresh runs). */
+function srcPick(btn, idx) {
+  const all = window.__cmpSources || [];
+  const s = all[idx];
+  if (!s) return;
+  cmpState.sources = all.map(x => ({ name: x.name, url: x.url }));
+  cmpState.idx = idx;
+  const img = document.getElementById('cmp-source-img');
+  if (img) { img.src = s.url; img.style.opacity = ''; }
+  const n = document.getElementById('cmp-source-name');
+  const c = document.getElementById('cmp-source-counter');
+  if (n) n.textContent = s.name;
+  if (c) c.textContent = `${idx + 1} / ${all.length}`;
+  btn.parentElement.querySelectorAll('.src-thumb-btn').forEach(b => {
+    b.classList.toggle('ring-2', b === btn);
+    b.classList.toggle('ring-blue-500', b === btn);
+  });
+}
+
+function cmpRender(jobId, report, meta) {
+  const bad = String(report.status || '').includes('reject');
+  const isBatch = Array.isArray(report.jobs);
+  const target = document.getElementById('result');
+  const sizeWh = report.output_size_wh || [];
+  const runtimeS = meta.runtime_ms ? (meta.runtime_ms / 1000).toFixed(1) : null;
+
+  /* Rejected / batch keep an informative card instead of the comparison. */
+  if (bad) {
+    cmpState.sources = [];
+    target.innerHTML = `
+      <div class="banner-err" role="alert">
+        <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        <div>
+          <p class="font-semibold text-xs">Engine rejected this job — no composite was produced.</p>
+          ${report.reason ? `<p class="text-[11px] mt-0.5">${esc(report.reason)}</p>` : ''}
+        </div>
+      </div>`;
+    return;
+  }
+  if (isBatch) {
+    cmpState.sources = [];
+    target.innerHTML = `
+      <div class="banner-ok" role="status">
+        <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        <div>
+          <p class="font-semibold text-xs">Batch run — ${report.jobs.length} jobs.</p>
+          <p class="text-[11px] mt-0.5">Browse the JSON tab (Batch) for per-job outputs.</p>
+        </div>
+      </div>`;
+    return;
+  }
+
+  const sources = (report.source_records || []).map(r => ({
+    name: r.name || 'source',
+    url: `/jobs/${jobId}/selected_regions/${encodeURIComponent(r.name || 'source')}.jpg`,
+  }));
+  cmpState.sources = sources;
+  cmpState.idx = 0;
+  cmpState.zoom = 1;
+
+  const statusBadge = bad ? '' :
+    `<span class="badge badge-ok text-[9px]">✓ Stitch complete</span>`;
+  const sizeBadge = sizeWh.length ? `<span class="text-[9px] font-semibold text-mute bg-soft border border-line rounded px-1.5 py-0.5">${sizeWh.join(' × ')}</span>` : '';
+
+  target.innerHTML = `
+    <div class="grid grid-cols-[1fr_auto_1fr] gap-3 items-stretch">
+      <!-- Source image(s) pane -->
+      <div class="rounded-xl border border-line bg-soft/40 p-2.5 flex flex-col min-w-0">
+        <div class="result-pane-header">
+          <span class="result-pane-label">
+            <svg class="w-3.5 h-3.5 text-blue-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
+            Source Image(s)
+          </span>
+          <span id="cmp-source-count" class="text-[9px] font-semibold text-blue-700 bg-blue-50 border border-blue-200 rounded-full px-2 py-0.5">${sources.length} image${sources.length !== 1 ? 's' : ''}</span>
+        </div>
+        <div class="relative flex-1 flex items-center justify-center min-h-[180px]">
+          ${sources.length > 1 ? `
+          <button type="button" onclick="cmpNav(-1)" aria-label="Previous source"
+                  class="result-nav-btn absolute left-1 z-10">‹</button>` : ''}
+          <img id="cmp-source-img" src="${sources[0] ? sources[0].url : ''}" alt="${sources[0] ? esc(sources[0].name) : ''}" loading="lazy"
+               class="max-h-56 max-w-full object-contain rounded-md border border-line bg-white cursor-zoom-in"
+               onclick="openLightbox(this.src)"
+               onerror="this.style.opacity='0.25'">
+          ${sources.length > 1 ? `
+          <button type="button" onclick="cmpNav(1)" aria-label="Next source"
+                  class="result-nav-btn absolute right-1 z-10">›</button>` : ''}
+        </div>
+        <div class="flex items-center justify-between mt-1.5">
+          <span id="cmp-source-name" class="text-[9px] font-mono text-mute truncate">${sources[0] ? esc(sources[0].name) : '—'}</span>
+          <span id="cmp-source-counter" class="text-[9px] text-mute">${sources.length ? '1 / ' + sources.length : '0 / 0'}</span>
+        </div>
+      </div>
+
+      <!-- Arrow connector -->
+      <div class="hidden md:flex items-center justify-center">
+        <span class="w-7 h-7 rounded-full bg-blue-600 text-white flex items-center justify-center shadow-lg shadow-blue-600/30">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
+        </span>
+      </div>
+
+      <!-- Stitched result pane -->
+      <div class="rounded-xl border border-line p-2.5 flex flex-col min-w-0">
+        <div class="result-pane-header">
+          <span class="result-pane-label">
+            <svg class="w-3.5 h-3.5 text-blue-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+            Stitched Result
+          </span>
+          <div class="result-pane-controls">
+            ${sizeBadge}
+            <button type="button" onclick="cmpZoom(-0.25)" aria-label="Zoom out" class="result-nav-btn">−</button>
+            <span id="cmp-zoom-label" class="text-[9px] text-mute w-8 text-center">100%</span>
+            <button type="button" onclick="cmpZoom(0.25)" aria-label="Zoom in" class="result-nav-btn">+</button>
+            <button type="button" onclick="openLightbox('/jobs/${jobId}/result.png')" aria-label="Fullscreen" class="result-nav-btn" title="Fullscreen">⤢</button>
+          </div>
+        </div>
+        <div class="flex-1 flex items-center justify-center min-h-[180px]">
+          <img id="cmp-result-img" src="/jobs/${jobId}/result.png" alt="Stitched result of ${esc(meta.label || jobId)}" loading="lazy"
+               class="max-h-56 max-w-full object-contain rounded-md border border-line bg-white cursor-zoom-in transition-transform"
+               onclick="openLightbox(this.src)"
+               onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'text-[10px] text-mute',textContent:'Result image unavailable.'}))">
+        </div>
+        <div class="flex items-center justify-between mt-1.5 flex-wrap gap-1">
+          ${statusBadge}
+          <span class="text-[9px] text-mute">${esc(title(meta.kind) || 'Single')} · ${esc(title(report.mode) || '—')} / ${esc(title(report.direction) || '—')}${runtimeS ? ` · ${runtimeS}s` : ''}</span>
+        </div>
+      </div>
+    </div>`;
+  cmpRenderSource();
+}
+
 async function selectJob(jobId) {
   document.querySelectorAll('.job-row').forEach(r => r.classList.toggle('job-on', r.dataset.jobId === jobId));
   const details = document.getElementById('job-details');
+  const statusChip = document.getElementById('job-details-status');
   details.innerHTML = '<p class="text-[11px] text-mute">Loading…</p>';
   try {
     const [reportRes, metaRes, configRes] = await Promise.all([
@@ -757,23 +938,16 @@ async function selectJob(jobId) {
     const bad = String(report.status).includes('reject');
     const isBatch = Array.isArray(report.jobs);
 
-    /* Result image (single jobs): clickable to open full size. */
-    let imageHtml;
-    if (bad) {
-      imageHtml = `<div class="rounded-lg border border-red-100 bg-red-50 p-2 text-[10px] text-red-700">
-        This job was rejected by the engine — no composite was produced.${report.reason ? `<br>Reason: ${esc(report.reason)}` : ''}</div>`;
-    } else if (isBatch) {
-      imageHtml = `<div class="rounded-lg border border-line bg-soft p-2 text-[10px] text-mute">
-        Batch run (${report.jobs.length} jobs) — browse the JSON tab or the job folder for per-job outputs.</div>`;
-    } else {
-      imageHtml = `<a href="/jobs/${jobId}/result.png" target="_blank" rel="noopener" title="Open full size in a new tab"
-             class="block relative rounded-lg overflow-hidden border border-line bg-[repeating-conic-gradient(#f1f5f9_0%_25%,#ffffff_0%_50%)] bg-[length:16px_16px] group">
-          <img src="/jobs/${jobId}/result.png" alt="Stitched result of ${esc(meta.label || jobId)}" loading="lazy"
-               class="w-full max-h-56 object-contain bg-white cursor-zoom-in"
-               onerror="this.parentElement.replaceWith(Object.assign(document.createElement('div'),{className:'rounded-lg border border-line bg-soft p-2 text-[10px] text-mute',textContent:'Result image unavailable.'}))">
-          <span class="absolute bottom-1 right-1 text-[9px] font-medium text-white bg-black/55 rounded px-1.5 py-0.5 opacity-0 group-hover:opacity-100 transition-opacity">open full size ↗</span>
-        </a>`;
+    /* Header status chip mirrors the job state. */
+    if (statusChip) {
+      statusChip.classList.remove('hidden', 'badge-ok', 'badge-err', 'badge-amber');
+      if (bad) { statusChip.classList.add('badge-err'); statusChip.textContent = 'Rejected'; }
+      else if (report.status === 'created_requires_review') { statusChip.classList.add('badge-amber'); statusChip.textContent = 'Needs review'; }
+      else { statusChip.classList.add('badge-ok'); statusChip.textContent = 'Completed'; }
     }
+
+    /* Center panel: source → result comparison. */
+    cmpRender(jobId, report, meta);
 
     /* Compact seam + composition summary across containers. */
     let seamBits = [];
@@ -790,17 +964,15 @@ async function selectJob(jobId) {
     const warnCount = (report.warnings || []).length;
 
     const rows = [
-      ['Status', `<span class="badge ${bad ? 'badge-err' : 'badge-ok'}" title="${esc(report.status)}">${esc((report.status || '').replace('created_requires_review', 'needs review'))}</span>`],
+      ['Job ID', `<span class="font-mono text-[10px]">${esc(jobId)}</span>`],
       ['Started', esc(meta.started_at || '—')],
       ['Runtime', runtime],
-      ['Kind', esc(title(meta.kind) || (isBatch ? 'Batch' : 'Single') )],
-      ['Mode / Direction', `${esc(title(report.mode) || '—')} / ${esc(title(report.direction) || '—')}`],
-      ['Direction basis', report.direction_basis === 'inferred_from_input_layout' ? 'input layout (unverified)' : 'explicit recipe'],
-      ['Quality', esc(report.quality_label || '—')],
-      ['Containers', isBatch ? `${report.jobs.length} jobs` : `${(report.containers || []).length} (${methods.join(', ') || '—'})`],
-      ['Seam', esc(seamSummary)],
+      ['Mode', `${esc(title(report.mode) || '—')} / ${esc(title(report.direction) || '—')}`],
+      ['Input images', isBatch ? `${report.jobs.length} jobs` : `${(report.source_records || []).length}`],
       ['Output size', `${(report.output_size_wh || []).join(' × ') || '—'}`],
-      ['Warnings', isBatch ? '—' : `${warnCount} (see report JSON)`],
+      ['Edge alignment', esc(seamSummary)],
+      ['Quality', esc(report.quality_label || '—')],
+      ['Warnings', isBatch ? '—' : `${warnCount}`],
     ];
     const rowsHtml = rows.map(([k, v]) => `<div class="detail-row"><span>${k}</span><b>${v}</b></div>`).join('');
 
@@ -814,11 +986,10 @@ async function selectJob(jobId) {
 
     details.innerHTML = `
       <div class="space-y-2">
-        ${imageHtml}
         <div class="flex flex-wrap gap-x-3 gap-y-1">
           ${actions.map(a => a).join('')}
         </div>
-        <div class="space-y-1 text-[11px]">${rowsHtml}</div>
+        <div>${rowsHtml}</div>
       </div>`;
   } catch (err) {
     details.innerHTML = `<p class="text-xs text-mute">Could not load this job's details.</p>`;
